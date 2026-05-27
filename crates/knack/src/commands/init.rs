@@ -240,10 +240,7 @@ fn configure_self_host(args: &InitArgs, mode: OutputMode) -> CliResult<BackendMo
     if !args.skip_bootstrap {
         if !mode.quiet && !mode.json {
             println!();
-            println!(
-                "→ bootstrapping github.com/{}/{}",
-                owner, repo
-            );
+            println!("→ bootstrapping github.com/{}/{}", owner, repo);
             println!("  local clone: {}", local_path.display());
         }
 

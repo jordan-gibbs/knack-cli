@@ -5,6 +5,7 @@ use console::style;
 use serde_json::json;
 
 use crate::api::{folders as api_folders, skills as api_skills, ApiClient};
+use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
 use crate::output::{emit_err, emit_ok, OutputMode};
 
@@ -31,6 +32,15 @@ pub struct ListArgs {
 }
 
 pub async fn run(args: ListArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> {
+    if let BackendMode::Github {
+        owner,
+        repo,
+        local_path,
+    } = &client.config.backend
+    {
+        return github_list(owner, repo, local_path, mode).await;
+    }
+
     // Resolve --folder to a folder_id up front. If the name doesn't
     // exist we fail loud — silently returning an empty page would look
     // like "you have no matching skills" which is a lie.
@@ -103,6 +113,64 @@ pub async fn run(args: ListArgs, client: ApiClient, mode: OutputMode) -> CliResu
                         style(&s.scope).dim()
                     );
                 }
+            }
+        },
+    );
+    Ok(())
+}
+
+async fn github_list(
+    owner: &str,
+    repo: &str,
+    local_path: &std::path::Path,
+    mode: OutputMode,
+) -> CliResult<()> {
+    use knack_backend_github::GithubBackend;
+    use knack_types::Backend;
+
+    let backend = GithubBackend::new(
+        owner.to_string(),
+        repo.to_string(),
+        local_path.to_path_buf(),
+    );
+    let skills = backend.list().await.map_err(|e| {
+        let err = CliError::User {
+            code: "GH_LIST_FAILED".into(),
+            message: format!("github list failed: {e}"),
+            hint: None,
+        };
+        emit_err(mode, &err);
+        err
+    })?;
+
+    emit_ok(
+        mode,
+        json!({
+            "items": skills.iter().map(|s| json!({
+                "slug": s.slug,
+                "version": s.version,
+                "author": s.author,
+                "description": s.description,
+                "source": "github",
+            })).collect::<Vec<_>>(),
+            "backend": "github",
+            "owner": owner,
+            "repo": repo,
+        }),
+        || {
+            if skills.is_empty() {
+                println!("no skills yet. run `knack create <slug>` to author one.");
+                return;
+            }
+            println!(
+                "{:<32} {:<10} {}",
+                style("slug").bold(),
+                style("version").bold(),
+                style("description").bold()
+            );
+            for s in &skills {
+                let desc = s.description.as_deref().unwrap_or("");
+                println!("{:<32} {:<10} {}", s.slug, s.version, desc);
             }
         },
     );

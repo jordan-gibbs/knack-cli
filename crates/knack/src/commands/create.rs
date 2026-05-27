@@ -17,6 +17,7 @@ use clap::Args;
 use serde_json::json;
 
 use crate::api::{auth as api_auth, skills as api_skills, ApiClient};
+use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
 use crate::output::{emit_err, emit_ok, OutputMode};
 
@@ -65,6 +66,16 @@ pub struct CreateArgs {
 
 pub async fn run(args: CreateArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> {
     validate_slug(&args.slug)?;
+
+    if let BackendMode::Github {
+        owner,
+        repo: _,
+        local_path,
+    } = &client.config.backend
+    {
+        return github_create(&args, owner, local_path, mode).await;
+    }
+
     validate_scope(&args.scope, args.team_id.as_deref())?;
 
     let body = api_skills::SkillCreate {
@@ -400,4 +411,71 @@ mod tests {
             other => panic!("expected User error, got {other:?}"),
         }
     }
+}
+
+async fn github_create(
+    args: &CreateArgs,
+    owner: &str,
+    local_path: &std::path::Path,
+    mode: OutputMode,
+) -> CliResult<()> {
+    let skill_dir = local_path.join("skills").join(&args.slug);
+    if skill_dir.exists() {
+        let err = CliError::User {
+            code: "SKILL_EXISTS".into(),
+            message: format!(
+                "skill folder already exists at {}. delete it or pick a different slug.",
+                skill_dir.display()
+            ),
+            hint: None,
+        };
+        emit_err(mode, &err);
+        return Err(err);
+    }
+    std::fs::create_dir_all(&skill_dir).map_err(CliError::from)?;
+    std::fs::create_dir_all(skill_dir.join("examples")).map_err(CliError::from)?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let description = args
+        .description
+        .clone()
+        .unwrap_or_else(|| format!("(describe what '{}' does in one sentence)", args.slug));
+
+    let skill_md = format!(
+        "---\nname: {name}\ndescription: {desc}\n---\n\n# {name}\n\n## How to do it\n\n(write the steps here)\n\n## Intuition\n\n(write the rules of thumb here)\n\n## Definition of done\n\n(write the success criteria here)\n",
+        name = args.name,
+        desc = description,
+    );
+    let meta_yaml = format!(
+        "id: {id}\nname: {name}\nslug: {slug}\nauthor: {author}\nversion: 0.1.0\ndescription: {desc}\n",
+        id = id,
+        name = args.name,
+        slug = args.slug,
+        author = owner,
+        desc = description,
+    );
+    let intuition = "# Scenarios\n\n- When X happens, do Y.\n- Edge case: ...\n";
+    let examples_readme = "Drop input/output pairs here as `01-input.md` / `01-output.md`, etc.\n";
+
+    std::fs::write(skill_dir.join("SKILL.md"), skill_md).map_err(CliError::from)?;
+    std::fs::write(skill_dir.join("meta.knack.yaml"), meta_yaml).map_err(CliError::from)?;
+    std::fs::write(skill_dir.join("intuition.md"), intuition).map_err(CliError::from)?;
+    std::fs::write(skill_dir.join("examples/README.md"), examples_readme)
+        .map_err(CliError::from)?;
+
+    emit_ok(
+        mode,
+        json!({
+            "slug": &args.slug,
+            "path": skill_dir.display().to_string(),
+            "backend": "github",
+        }),
+        || {
+            println!("✓ created {}", skill_dir.display());
+            println!();
+            println!("next: edit {}/SKILL.md", skill_dir.display());
+            println!("      then run `knack publish {}`", args.slug);
+        },
+    );
+    Ok(())
 }

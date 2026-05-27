@@ -151,14 +151,8 @@ fn scaffold(local_path: &Path, owner: &str, repo: &str) -> Result<()> {
     fs::create_dir_all(local_path.join("skills"))?;
     fs::create_dir_all(local_path.join("runs"))?;
 
-    write_if_missing(
-        &local_path.join("skills").join(".gitkeep"),
-        "",
-    )?;
-    write_if_missing(
-        &local_path.join("runs").join(".gitkeep"),
-        "",
-    )?;
+    write_if_missing(&local_path.join("skills").join(".gitkeep"), "")?;
+    write_if_missing(&local_path.join("runs").join(".gitkeep"), "")?;
     write_if_missing(
         &local_path.join(".gitignore"),
         ".knack/local-state.json\n.DS_Store\n",
@@ -201,10 +195,13 @@ fn commit_initial(repo: &Repository, opts: &BootstrapOpts) -> Result<()> {
     let tree_oid = index.write_tree().context("write tree")?;
     let tree = repo.find_tree(tree_oid)?;
 
-    let sig = Signature::now(&opts.author_name, &opts.author_email)
-        .context("build signature")?;
+    let sig = Signature::now(&opts.author_name, &opts.author_email).context("build signature")?;
 
-    let parent = repo.head().ok().and_then(|h| h.target()).and_then(|oid| repo.find_commit(oid).ok());
+    let parent = repo
+        .head()
+        .ok()
+        .and_then(|h| h.target())
+        .and_then(|oid| repo.find_commit(oid).ok());
     let parents: Vec<&git2::Commit> = match &parent {
         Some(c) => vec![c],
         None => vec![],
@@ -239,10 +236,7 @@ fn push_main_via_git_cli(local_path: &Path) -> Result<()> {
         .context("invoke git push")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "git push origin main failed: {}",
-            stderr.trim()
-        ));
+        return Err(anyhow!("git push origin main failed: {}", stderr.trim()));
     }
     Ok(())
 }
