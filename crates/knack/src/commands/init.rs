@@ -41,14 +41,43 @@ pub struct InitArgs {
     pub cloud: bool,
 
     /// GitHub repo to use for self-host mode, in `<owner>/<repo>` form.
-    /// If omitted in --self-host mode, defaults to `<your-gh-handle>/knack`.
+    /// If omitted in --self-host mode, prompts interactively for the name.
     #[arg(long)]
     pub github_repo: Option<String>,
+
+    /// Visibility of the repo to create in --self-host mode.
+    #[arg(long, value_enum, default_value_t = VisibilityFlag::Private)]
+    pub visibility: VisibilityFlag,
+
+    /// Where to clone the self-host repo locally. Defaults to `~/<repo-name>`.
+    #[arg(long)]
+    pub local_path: Option<PathBuf>,
 
     /// Skip the interactive prompt even if no flag is passed. Implies cloud.
     /// Useful for unattended setups.
     #[arg(long)]
     pub yes: bool,
+
+    /// Skip the actual GitHub repo creation + clone + push (Phase A bootstrap).
+    /// Just write the config. Useful for tests and for users who want to
+    /// manage the remote repo themselves.
+    #[arg(long)]
+    pub skip_bootstrap: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum VisibilityFlag {
+    Public,
+    Private,
+}
+
+impl From<VisibilityFlag> for knack_backend_github::Visibility {
+    fn from(v: VisibilityFlag) -> Self {
+        match v {
+            VisibilityFlag::Public => knack_backend_github::Visibility::Public,
+            VisibilityFlag::Private => knack_backend_github::Visibility::Private,
+        }
+    }
 }
 
 pub fn run(args: InitArgs, mode: OutputMode) -> CliResult<()> {
@@ -84,13 +113,21 @@ pub fn run(args: InitArgs, mode: OutputMode) -> CliResult<()> {
     let already_configured = config_file_path().map(|p| p.exists()).unwrap_or(false);
 
     let backend = if args.self_host {
-        Some(configure_self_host(args.github_repo.as_deref(), mode)?)
+        let b = configure_self_host(&args, mode).map_err(|e| {
+            emit_err(mode, &e);
+            e
+        })?;
+        Some(b)
     } else if args.cloud || args.yes {
         Some(BackendMode::Cloud {
             api_base: "https://api.getknack.ai".into(),
         })
     } else if !already_configured && !mode.quiet && !mode.json {
-        Some(prompt_for_backend(mode)?)
+        let b = prompt_for_backend(&args, mode).map_err(|e| {
+            emit_err(mode, &e);
+            e
+        })?;
+        Some(b)
     } else {
         None
     };
@@ -151,7 +188,7 @@ fn backend_label(b: &BackendMode) -> String {
     }
 }
 
-fn prompt_for_backend(mode: OutputMode) -> CliResult<BackendMode> {
+fn prompt_for_backend(args: &InitArgs, mode: OutputMode) -> CliResult<BackendMode> {
     println!();
     println!("welcome to knack.");
     println!();
@@ -169,7 +206,7 @@ fn prompt_for_backend(mode: OutputMode) -> CliResult<BackendMode> {
     let choice = line.trim();
 
     match choice {
-        "1" | "github" | "gh" => configure_self_host(None, mode),
+        "1" | "github" | "gh" => configure_self_host(args, mode),
         "2" | "cloud" | "" => Ok(BackendMode::Cloud {
             api_base: "https://api.getknack.ai".into(),
         }),
@@ -181,23 +218,101 @@ fn prompt_for_backend(mode: OutputMode) -> CliResult<BackendMode> {
     }
 }
 
-fn configure_self_host(repo_override: Option<&str>, _mode: OutputMode) -> CliResult<BackendMode> {
+fn configure_self_host(args: &InitArgs, mode: OutputMode) -> CliResult<BackendMode> {
     let gh_user = resolve_gh_user()?;
-    let (owner, repo) = match repo_override {
+
+    let (owner, repo) = match args.github_repo.as_deref() {
         Some(spec) => parse_owner_repo(spec)?,
-        None => (gh_user.clone(), "knack".to_string()),
+        None => {
+            let name = prompt_for_repo_name()?;
+            (gh_user.clone(), name)
+        }
     };
 
-    let local_path = match dirs::home_dir() {
-        Some(home) => home.join("knack"),
-        None => PathBuf::from(".").join("knack"),
+    let local_path = match &args.local_path {
+        Some(p) => p.clone(),
+        None => match dirs::home_dir() {
+            Some(home) => home.join(&repo),
+            None => PathBuf::from(".").join(&repo),
+        },
     };
+
+    if !args.skip_bootstrap {
+        if !mode.quiet && !mode.json {
+            println!();
+            println!(
+                "→ bootstrapping github.com/{}/{}",
+                owner, repo
+            );
+            println!("  local clone: {}", local_path.display());
+        }
+
+        let opts = knack_backend_github::BootstrapOpts {
+            owner: owner.clone(),
+            repo: repo.clone(),
+            visibility: args.visibility.into(),
+            local_path: local_path.clone(),
+            author_name: gh_user.clone(),
+            author_email: format!("{}@users.noreply.github.com", gh_user),
+        };
+        let result = knack_backend_github::bootstrap_repo(&opts).map_err(|e| CliError::User {
+            code: "BOOTSTRAP_FAILED".into(),
+            // `{:#}` prints anyhow's full source chain so the user sees
+            // the underlying libgit2 / gh CLI failure, not just the
+            // top-level "git push origin main".
+            message: format!("self-host bootstrap failed: {e:#}"),
+            hint: Some(
+                "verify `gh auth status` shows the `repo` scope, and that the repo name isn't already taken".into(),
+            ),
+        })?;
+        if !mode.quiet && !mode.json {
+            if result.created_repo {
+                println!("✓ created {}", result.https_url);
+            } else {
+                println!("✓ using existing {}", result.https_url);
+            }
+            println!("✓ scaffolded {}", result.local_path.display());
+        }
+    }
 
     Ok(BackendMode::Github {
         owner,
         repo,
         local_path,
     })
+}
+
+fn prompt_for_repo_name() -> CliResult<String> {
+    println!();
+    println!("what should we call your skills repo?");
+    println!("  (this becomes github.com/<your-handle>/<name>)");
+    print!("repo name: ");
+    std::io::stdout().flush().ok();
+
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    let name = line.trim().to_string();
+    if name.is_empty() {
+        return Err(CliError::User {
+            code: "EMPTY_REPO_NAME".into(),
+            message: "repo name cannot be empty".into(),
+            hint: Some("try `knack-skills` or any name you like".into()),
+        });
+    }
+    // GitHub repo names: alphanumerics, hyphens, underscores, dots, max 100.
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(CliError::User {
+            code: "INVALID_REPO_NAME".into(),
+            message: format!(
+                "repo name '{name}' contains invalid characters (use letters, digits, '-', '_', '.')"
+            ),
+            hint: None,
+        });
+    }
+    Ok(name)
 }
 
 fn parse_owner_repo(spec: &str) -> CliResult<(String, String)> {
@@ -261,7 +376,10 @@ mod tests {
             self_host: false,
             cloud: true, // skip prompt
             github_repo: None,
+            visibility: VisibilityFlag::Private,
+            local_path: None,
             yes: false,
+            skip_bootstrap: true,
         };
         let mode = OutputMode {
             json: false,
@@ -290,7 +408,10 @@ mod tests {
                 self_host: false,
                 cloud: true,
                 github_repo: None,
+                visibility: VisibilityFlag::Private,
+                local_path: None,
                 yes: false,
+                skip_bootstrap: true,
             };
             run(args, mode).unwrap();
         }
