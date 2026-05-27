@@ -6,7 +6,9 @@
 
 mod auth;
 mod backend;
+mod bootstrap;
 mod runs;
 
 pub use auth::{resolve_token, GithubAuth};
 pub use backend::GithubBackend;
+pub use bootstrap::{bootstrap_repo, BootstrapOpts, BootstrapResult, Visibility};
