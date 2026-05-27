@@ -370,6 +370,18 @@ async fn github_publish(
     // bump from meta.knack.yaml's current version, then default to 0.1.0.
     let version = resolve_github_version(args, &skill_dir)?;
 
+    // Write the bumped version back to meta.knack.yaml on disk BEFORE the
+    // publish commit. Otherwise the committed file (and any subsequent
+    // `knack run`) would still report the pre-bump value, putting the
+    // telemetry log out of sync with the git tag.
+    if !args.dry_run {
+        if let Err(e) = update_meta_version(&skill_dir, &version) {
+            let err = CliError::Internal(format!("update meta.knack.yaml: {e}"));
+            emit_err(mode, &err);
+            return Err(err);
+        }
+    }
+
     if args.dry_run {
         emit_ok(
             mode,
@@ -436,6 +448,35 @@ async fn github_publish(
         },
     );
     Ok(())
+}
+
+/// Rewrite the `version:` field in `meta.knack.yaml`, preserving every
+/// other line (and ordering, and comments) untouched. Textual line-level
+/// replacement on purpose — `serde_yaml` would round-trip-drop comments.
+fn update_meta_version(skill_dir: &Path, new_version: &str) -> std::io::Result<()> {
+    let meta_path = skill_dir.join("meta.knack.yaml");
+    let raw = std::fs::read_to_string(&meta_path)?;
+    let mut replaced = false;
+    let mut out_lines: Vec<String> = Vec::with_capacity(raw.lines().count() + 1);
+    for line in raw.lines() {
+        let trimmed = line.trim_start();
+        if !replaced && trimmed.starts_with("version:") {
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            out_lines.push(format!("{indent}version: {new_version}"));
+            replaced = true;
+        } else {
+            out_lines.push(line.to_string());
+        }
+    }
+    if !replaced {
+        // No prior version key — append one.
+        out_lines.push(format!("version: {new_version}"));
+    }
+    let mut content = out_lines.join("\n");
+    if raw.ends_with('\n') {
+        content.push('\n');
+    }
+    std::fs::write(&meta_path, content)
 }
 
 fn resolve_github_version(args: &PublishArgs, skill_dir: &Path) -> CliResult<String> {

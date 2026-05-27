@@ -108,7 +108,14 @@ pub async fn pull_external(spec: &ExternalSpec) -> Result<SkillPackage> {
         ));
     }
 
-    let version = spec.version.clone().unwrap_or_else(|| "0.0.0".to_string());
+    // Resolve the displayed version. Explicit `@vX.Y.Z` wins. Otherwise
+    // parse the fetched meta.knack.yaml; falls back to "0.0.0" only if the
+    // file is missing or unparseable.
+    let version = spec
+        .version
+        .clone()
+        .or_else(|| read_version_from_meta(&files))
+        .unwrap_or_else(|| "0.0.0".to_string());
     Ok(SkillPackage {
         slug: spec.slug.clone(),
         version: version.clone(),
@@ -122,6 +129,18 @@ pub async fn pull_external(spec: &ExternalSpec) -> Result<SkillPackage> {
         },
         files,
     })
+}
+
+fn read_version_from_meta(files: &[SkillFile]) -> Option<String> {
+    let meta = files
+        .iter()
+        .find(|f| f.path == std::path::Path::new("meta.knack.yaml"))?;
+    let text = std::str::from_utf8(&meta.bytes).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(text).ok()?;
+    value
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 #[derive(Debug, Deserialize)]

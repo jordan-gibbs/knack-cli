@@ -21,7 +21,7 @@ use serde_json::json;
 
 use crate::config::{config_file_path, save_backend_mode, BackendMode};
 use crate::errors::{CliError, CliResult};
-use crate::output::{emit_err, emit_ok, OutputMode};
+use crate::output::{display_path, emit_err, emit_ok, OutputMode};
 use crate::workspace::{init_workspace, is_workspace};
 
 #[derive(Debug, Args)]
@@ -90,11 +90,23 @@ pub fn run(args: InitArgs, mode: OutputMode) -> CliResult<()> {
         })?,
     };
 
-    if !cwd.is_dir() {
+    // `knack init` should make things, not refuse. If --at points at a
+    // missing path, create it. Only error if the path exists but is a file.
+    if !cwd.exists() {
+        if let Err(e) = std::fs::create_dir_all(&cwd) {
+            let err = CliError::User {
+                code: "INIT_INVALID_TARGET".into(),
+                message: format!("could not create {}: {e}", cwd.display()),
+                hint: None,
+            };
+            emit_err(mode, &err);
+            return Err(err);
+        }
+    } else if !cwd.is_dir() {
         let err = CliError::User {
             code: "INIT_INVALID_TARGET".into(),
-            message: format!("not a directory: {}", cwd.display()),
-            hint: Some("pass --at <existing-dir> or run from a real workspace".into()),
+            message: format!("{} exists but is not a directory", cwd.display()),
+            hint: Some("delete the file or pass --at <another-path>".into()),
         };
         emit_err(mode, &err);
         return Err(err);
@@ -180,9 +192,9 @@ pub fn run(args: InitArgs, mode: OutputMode) -> CliResult<()> {
         }),
         || {
             if already_existed {
-                println!("✓ workspace ready at {}", ws.display());
+                println!("✓ workspace ready at {}", display_path(&ws));
             } else {
-                println!("✓ initialized {} (skills/, drafts/)", ws.display());
+                println!("✓ initialized {} (skills/, drafts/)", display_path(&ws));
             }
             if let Some(b) = &backend {
                 println!("✓ backend: {}", backend_label(b));
@@ -268,7 +280,7 @@ fn configure_self_host(args: &InitArgs, mode: OutputMode) -> CliResult<BackendMo
         if !mode.quiet && !mode.json {
             println!();
             println!("→ bootstrapping github.com/{}/{}", owner, repo);
-            println!("  local clone: {}", local_path.display());
+            println!("  local clone: {}", display_path(&local_path));
         }
 
         let opts = knack_backend_github::BootstrapOpts {
@@ -295,7 +307,7 @@ fn configure_self_host(args: &InitArgs, mode: OutputMode) -> CliResult<BackendMo
             } else {
                 println!("✓ using existing {}", result.https_url);
             }
-            println!("✓ scaffolded {}", result.local_path.display());
+            println!("✓ scaffolded {}", display_path(&result.local_path));
         }
     }
 

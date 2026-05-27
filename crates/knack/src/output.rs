@@ -8,6 +8,19 @@
 use console::{style, Term};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::path::Path;
+
+/// Render a path with forward slashes for user-visible output.
+///
+/// On Windows, joining a bash-style root (`/c/Users/...`) with native
+/// `PathBuf::join` produces mixed separators (`C:/Users/Jordan\skills\foo`).
+/// That looks broken even though it works. Use this helper anywhere a path
+/// is going into a human-readable string (println!, error messages). Don't
+/// use it for paths going into JSON envelopes — those should be the native
+/// shape so downstream tooling can pass them to the OS without rewriting.
+pub fn display_path(p: &Path) -> String {
+    p.display().to_string().replace('\\', "/")
+}
 
 use crate::errors::CliError;
 

@@ -19,7 +19,7 @@ use serde_json::json;
 use crate::api::{auth as api_auth, skills as api_skills, ApiClient};
 use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
-use crate::output::{emit_err, emit_ok, OutputMode};
+use crate::output::{display_path, emit_err, emit_ok, OutputMode};
 
 #[derive(Debug, Args)]
 pub struct CreateArgs {
@@ -471,9 +471,9 @@ async fn github_create(
             "backend": "github",
         }),
         || {
-            println!("✓ created {}", skill_dir.display());
+            println!("✓ created {}", display_path(&skill_dir));
             println!();
-            println!("next: edit {}/SKILL.md", skill_dir.display());
+            println!("next: edit {}/SKILL.md", display_path(&skill_dir));
             println!("      then run `knack publish {}`", args.slug);
         },
     );

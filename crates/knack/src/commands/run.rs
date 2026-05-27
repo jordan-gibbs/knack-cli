@@ -26,7 +26,7 @@ use crate::api::runs as api_runs;
 use crate::api::{skills as api_skills, ApiClient};
 use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
-use crate::output::{chatter, emit_err, emit_ok, OutputMode};
+use crate::output::{chatter, display_path, emit_err, emit_ok, OutputMode};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -213,7 +213,7 @@ fn github_run(args: &RunArgs, local_path: &std::path::Path, mode: OutputMode) ->
         }),
         || {
             println!("✓ {} run-id: {}", slug, run_id);
-            println!("  recorded to {}", day_file.display());
+            println!("  recorded to {}", display_path(&day_file));
             println!();
             println!(
                 "close the loop with: knack mark {} succeeded   (or `failed --reason …`)",

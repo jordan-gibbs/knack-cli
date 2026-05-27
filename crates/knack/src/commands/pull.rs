@@ -20,7 +20,7 @@ use serde_json::json;
 use crate::api::{skills as api_skills, ApiClient};
 use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
-use crate::output::{chatter, emit_err, emit_ok, OutputMode};
+use crate::output::{chatter, display_path, emit_err, emit_ok, OutputMode};
 use crate::skill_pack::unpack_skill;
 
 #[derive(Debug, Args)]
@@ -349,7 +349,7 @@ async fn github_pull(
             "backend": "github",
         }),
         || {
-            println!("✓ {} v{} → {}", pkg.slug, pkg.version, dir.display());
+            println!("✓ {} v{} → {}", pkg.slug, pkg.version, display_path(&dir));
             println!("  ({} files)", pkg.files.len());
         },
     );

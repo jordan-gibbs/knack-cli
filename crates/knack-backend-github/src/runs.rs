@@ -1,16 +1,49 @@
 //! Local run telemetry for self-host mode.
 //!
-//! Records live in `<repo>/runs/<yyyy-mm>/<yyyy-mm-dd>.jsonl`, append-only,
-//! one event per line. Two event kinds exist:
+//! ## Rules (the consistent shape)
 //!
-//!   - `started`: written by `knack run <slug>`. Pins the skill version and
-//!     timestamps the start.
-//!   - `marked`: written by `knack mark <run_id> succeeded|failed`. Records
-//!     outcome + optional note.
+//! **Storage.** One JSONL file per day at
+//! `<local_clone>/runs/<YYYY-MM>/<YYYY-MM-DD>.jsonl`. Append-only. Files
+//! are organized by month to keep directory listings small.
 //!
-//! Finding a run looks across the last 30 days of JSONL files (chronologically
-//! recent first). The latest event for a given `run_id` wins; if a `started`
-//! exists without a `marked`, status is reported as `started`.
+//! **Schema.** Every line is a [`RunEvent`] with these fields. Optional
+//! fields are omitted when missing; required fields are always present.
+//!
+//!   * `event`     (required, "started" | "marked") — the kind of record.
+//!   * `run_id`    (required, UUID string) — stable id linking events of
+//!                 the same run across the day's file.
+//!   * `at`        (required, RFC3339 UTC) — when the event was recorded.
+//!   * `skill`     (set on `started`, propagated to `marked`) — slug.
+//!   * `version`   (set on `started`) — semver at the time of the run.
+//!   * `agent`     (set on `started`) — caller-supplied tag
+//!                 ("claude-code", "cursor", "codex", ...).
+//!   * `input`     (set on `started`) — path or short summary of the input.
+//!   * `status`    (set on every event) — "started" | "succeeded" | "failed"
+//!                 | "aborted".
+//!   * `note`      (set on `marked` when --note / --reason was passed) —
+//!                 free-form text. For "failed", explain what went wrong.
+//!
+//! **Lifecycle.** A run goes through two events:
+//!
+//!   1. `knack run <slug>` writes a `started` event and prints the
+//!      generated `run_id`.
+//!   2. `knack mark <run_id> succeeded|failed [--note …]` writes a
+//!      `marked` event that closes the loop.
+//!
+//! **Lookback.** [`find_run`] scans the last [`LOOKBACK_DAYS`] of daily
+//! files (newest first). A `marked` event is considered authoritative;
+//! a lone `started` reports `status = "started"`.
+//!
+//! **Push policy.** Events are NOT auto-committed or auto-pushed. They
+//! sit locally in the git working tree as untracked or modified files.
+//! The user (or `knack publish <skill>`) is responsible for committing
+//! the `runs/` directory when they want it to land on the remote. This
+//! keeps `knack run` and `knack mark` fast (no network) and avoids a
+//! noisy commit per call.
+//!
+//! **Tolerance.** The reader skips lines it can't parse (malformed,
+//! truncated, or a legacy [`knack_types::RunLog`] line from an older
+//! binary) so a stray line doesn't break `find_run`.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Duration, Utc};
@@ -23,10 +56,32 @@ use uuid::Uuid;
 
 const LOOKBACK_DAYS: i64 = 30;
 
-/// Append a structured RunLog (used by the legacy `Backend::record_run`
-/// surface). Kept for compatibility with the existing trait impl.
+/// Append a structured `RunLog` (the [`Backend::record_run`] trait surface).
+///
+/// Converts the legacy `RunLog` into the canonical [`RunEvent`] shape so
+/// every line in the JSONL has the same schema regardless of which writer
+/// produced it. `RunLog` represents a completed run (it has both start
+/// time and final status), so this writes a single `marked` event that
+/// implies the prior `started` (which `Backend::record_run` callers don't
+/// produce separately).
 pub fn append_run(repo: &Path, log: &RunLog) -> Result<()> {
-    let line = serde_json::to_string(log).context("serialize run log")?;
+    let status = match log.status {
+        knack_types::RunStatus::Succeeded => "succeeded",
+        knack_types::RunStatus::Failed => "failed",
+        knack_types::RunStatus::Aborted => "aborted",
+    };
+    let event = RunEvent {
+        event: "marked".into(),
+        run_id: log.run_id.to_string(),
+        skill: Some(log.skill.clone()),
+        version: None,
+        agent: Some(log.agent.clone()),
+        input: None,
+        status: Some(status.into()),
+        note: None,
+        at: log.started_at,
+    };
+    let line = serde_json::to_string(&event).context("serialize run event")?;
     append_to_day_file(repo, &log.started_at, &line)
 }
 
