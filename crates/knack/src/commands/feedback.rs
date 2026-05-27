@@ -97,13 +97,13 @@ pub async fn run(cmd: FeedbackCmd, client: ApiClient, mode: OutputMode) -> CliRe
 fn resolve_body(raw: &str) -> Result<String, CliError> {
     if raw == "-" {
         let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf).map_err(|e| {
-            CliError::User {
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| CliError::User {
                 code: "STDIN_READ_FAILED".into(),
                 message: format!("could not read --body from stdin: {e}"),
                 hint: None,
-            }
-        })?;
+            })?;
         let trimmed = buf.trim().to_string();
         if trimmed.is_empty() {
             return Err(CliError::User {
@@ -134,7 +134,11 @@ async fn open(args: OpenArgs, client: ApiClient, mode: OutputMode) -> CliResult<
             return Err(e);
         }
     };
-    let cli_context = if args.cli_meta { Some(cli_meta_blob()) } else { None };
+    let cli_context = if args.cli_meta {
+        Some(cli_meta_blob())
+    } else {
+        None
+    };
 
     match api_feedback::open(
         &client,
@@ -202,7 +206,11 @@ async fn list(args: ListArgs, client: ApiClient, mode: OutputMode) -> CliResult<
                         return;
                     }
                     for t in &items {
-                        let unread = if t.has_unread_admin_replies { "•" } else { " " };
+                        let unread = if t.has_unread_admin_replies {
+                            "•"
+                        } else {
+                            " "
+                        };
                         println!(
                             "  {} {:<10} {:<8} {}",
                             unread,
@@ -213,7 +221,10 @@ async fn list(args: ListArgs, client: ApiClient, mode: OutputMode) -> CliResult<
                     }
                     let unread_count = items.iter().filter(|t| t.has_unread_admin_replies).count();
                     if unread_count > 0 {
-                        eprintln!("  ({} thread(s) with unread replies — `knack feedback show <id>`)", unread_count);
+                        eprintln!(
+                            "  ({} thread(s) with unread replies — `knack feedback show <id>`)",
+                            unread_count
+                        );
                     }
                 },
             );
@@ -251,16 +262,17 @@ async fn show(args: ShowArgs, client: ApiClient, mode: OutputMode) -> CliResult<
                         } else {
                             "you"
                         };
-                        println!("\n  [{}] {}", who, m.created_at.format("%Y-%m-%d %H:%M UTC"));
+                        println!(
+                            "\n  [{}] {}",
+                            who,
+                            m.created_at.format("%Y-%m-%d %H:%M UTC")
+                        );
                         for line in m.body.lines() {
                             println!("    {}", line);
                         }
                     }
                     if thread.status == "open" {
-                        println!(
-                            "\n  reply: knack feedback reply {} --body \"…\"",
-                            thread.id
-                        );
+                        println!("\n  reply: knack feedback reply {} --body \"…\"", thread.id);
                     }
                 },
             );

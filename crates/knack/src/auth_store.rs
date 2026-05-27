@@ -159,10 +159,7 @@ impl FileStore {
             Ok(s) if s.trim().is_empty() => Ok(AuthFile::default()),
             Ok(s) => {
                 let file: AuthFile = serde_json::from_str(&s).map_err(|e| {
-                    CliError::Internal(format!(
-                        "could not parse {}: {e}",
-                        self.path.display()
-                    ))
+                    CliError::Internal(format!("could not parse {}: {e}", self.path.display()))
                 })?;
                 if file.version != FILE_SCHEMA_VERSION {
                     return Err(CliError::Internal(format!(
@@ -185,10 +182,7 @@ impl FileStore {
     fn write_file(&self, file: &AuthFile) -> Result<(), CliError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                CliError::Internal(format!(
-                    "could not create {}: {e}",
-                    parent.display()
-                ))
+                CliError::Internal(format!("could not create {}: {e}", parent.display()))
             })?;
         }
         let body = serde_json::to_string_pretty(file)
@@ -311,18 +305,14 @@ fn write_with_mode(path: &Path, body: &str) -> Result<(), CliError> {
             .truncate(true)
             .mode(0o600)
             .open(path)
-            .map_err(|e| {
-                CliError::Internal(format!("open {}: {e}", path.display()))
-            })?;
-        f.write_all(body.as_bytes()).map_err(|e| {
-            CliError::Internal(format!("write {}: {e}", path.display()))
-        })?;
+            .map_err(|e| CliError::Internal(format!("open {}: {e}", path.display())))?;
+        f.write_all(body.as_bytes())
+            .map_err(|e| CliError::Internal(format!("write {}: {e}", path.display())))?;
     }
     #[cfg(not(unix))]
     {
-        fs::write(path, body).map_err(|e| {
-            CliError::Internal(format!("write {}: {e}", path.display()))
-        })?;
+        fs::write(path, body)
+            .map_err(|e| CliError::Internal(format!("write {}: {e}", path.display())))?;
     }
     Ok(())
 }
@@ -562,11 +552,7 @@ mod tests {
     fn file_store_rejects_unknown_schema_version() {
         let (_dir, path) = isolate_file_store();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            r#"{"version": 999, "accounts": {}}"#,
-        )
-        .unwrap();
+        fs::write(&path, r#"{"version": 999, "accounts": {}}"#).unwrap();
         let store = FileStore::new(&path);
         let err = store.load("default").unwrap_err();
         // Surface as Internal so the user sees a clear message rather than
@@ -627,7 +613,11 @@ mod tests {
         // .codex even though dirs::home_dir() inside the sandbox would
         // be the sandbox user's profile. The CLI should derive the real
         // HOME from CODEX_HOME's parent.
-        let real_home = if cfg!(windows) { r"C:\Users\Jordan" } else { "/home/jordan" };
+        let real_home = if cfg!(windows) {
+            r"C:\Users\Jordan"
+        } else {
+            "/home/jordan"
+        };
         let codex_home = if cfg!(windows) {
             r"C:\Users\Jordan\.codex"
         } else {
@@ -648,7 +638,11 @@ mod tests {
         // Custom CODEX_HOME that doesn't end in `.codex` — could be a
         // user-customized layout. We should NOT assume `parent()` is a
         // HOME directory in that case; fall through to dirs::home_dir().
-        let custom = if cfg!(windows) { r"D:\custom\codexstuff" } else { "/srv/codexstuff" };
+        let custom = if cfg!(windows) {
+            r"D:\custom\codexstuff"
+        } else {
+            "/srv/codexstuff"
+        };
         unsafe {
             std::env::set_var("CODEX_HOME", custom);
         }

@@ -174,11 +174,7 @@ pub async fn run(args: PullArgs, client: ApiClient, mode: OutputMode) -> CliResu
     } else {
         crate::commands::install::installed::Scope::Project
     };
-    let shim_report = crate::commands::sync::sync_one_skill(
-        &skill.slug,
-        scope,
-        &client.config,
-    );
+    let shim_report = crate::commands::sync::sync_one_skill(&skill.slug, scope, &client.config);
 
     emit_ok(
         mode,

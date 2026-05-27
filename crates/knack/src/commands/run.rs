@@ -80,9 +80,7 @@ pub async fn run(args: RunArgs, client: ApiClient, mode: OutputMode) -> CliResul
         Some(semver) => match api_skills::get_version(&client, &skill.id, semver).await {
             Ok(v) => v.id,
             Err(CliError::NotFound(_)) => {
-                let err = CliError::NotFound(format!(
-                    "skill `{slug}` has no version `{semver}`"
-                ));
+                let err = CliError::NotFound(format!("skill `{slug}` has no version `{semver}`"));
                 emit_err(mode, &err);
                 return Err(err);
             }
@@ -134,8 +132,14 @@ pub async fn run(args: RunArgs, client: ApiClient, mode: OutputMode) -> CliResul
         }),
         || {
             println!("✓ run registered · {}", run.id);
-            println!("  next: read ~/.knack/skills/{}/SKILL.md and do the work yourself,", args.slug);
-            println!("        then `knack mark {} succeeded` (or `failed --note \"…\"`).", run.id);
+            println!(
+                "  next: read ~/.knack/skills/{}/SKILL.md and do the work yourself,",
+                args.slug
+            );
+            println!(
+                "        then `knack mark {} succeeded` (or `failed --note \"…\"`).",
+                run.id
+            );
         },
     );
 

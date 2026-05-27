@@ -146,10 +146,7 @@ pub fn run(args: InstallArgs, mode: OutputMode) -> CliResult<()> {
     Ok(())
 }
 
-fn select_targets(
-    args: &InstallArgs,
-    mode: OutputMode,
-) -> CliResult<Vec<&'static AgentTarget>> {
+fn select_targets(args: &InstallArgs, mode: OutputMode) -> CliResult<Vec<&'static AgentTarget>> {
     if args.all {
         return Ok(targets::TARGETS.iter().collect());
     }
@@ -473,9 +470,9 @@ fn strip_skill_md_frontmatter(skill_md: &str) -> &str {
 /// `.mdc` wrapper. Returns a generic fallback if parsing fails.
 fn meta_skill_description() -> String {
     match parse_skill_md_frontmatter(META_SKILL_FULL) {
-        Ok(Some(fm)) => fm.description.unwrap_or_else(|| {
-            "Use the knack CLI for portable agent skill management".into()
-        }),
+        Ok(Some(fm)) => fm
+            .description
+            .unwrap_or_else(|| "Use the knack CLI for portable agent skill management".into()),
         _ => "Use the knack CLI for portable agent skill management".into(),
     }
 }
@@ -526,9 +523,7 @@ fn install_path_for_target(target: &AgentTarget) -> Option<PathBuf> {
         ShimStyle::NativeSkill => {
             (target.shim_root)(Scope::Home).map(|r| r.join("knack").join("SKILL.md"))
         }
-        ShimStyle::NativeRule => {
-            (target.shim_root)(Scope::Home).map(|r| r.join("knack.mdc"))
-        }
+        ShimStyle::NativeRule => (target.shim_root)(Scope::Home).map(|r| r.join("knack.mdc")),
         ShimStyle::TextBlock | ShimStyle::None => (target.config_path)(),
     }
 }
@@ -621,8 +616,14 @@ mod tests {
         let aider = targets::find("aider").expect("aider target registered");
         assert_eq!(aider.shim_style, ShimStyle::TextBlock);
         let body = render_body(aider);
-        assert!(!body.starts_with("---"), "TextBlock body should not have frontmatter");
-        assert!(!body.starts_with(shim::SHIM_SIGIL), "TextBlock body should not have shim sigil");
+        assert!(
+            !body.starts_with("---"),
+            "TextBlock body should not have frontmatter"
+        );
+        assert!(
+            !body.starts_with(shim::SHIM_SIGIL),
+            "TextBlock body should not have shim sigil"
+        );
         assert!(body.contains("knack list"));
         assert!(body.contains("knack info"));
     }
@@ -634,7 +635,10 @@ mod tests {
         // Should end with `<runtime>/skills/knack/SKILL.md`, NOT
         // `<runtime>/CLAUDE.md` (the legacy install-block location).
         let s = path.display().to_string();
-        assert!(s.ends_with("knack/SKILL.md") || s.ends_with("knack\\SKILL.md"), "got {s}");
+        assert!(
+            s.ends_with("knack/SKILL.md") || s.ends_with("knack\\SKILL.md"),
+            "got {s}"
+        );
         assert!(s.contains("skills"), "got {s}");
     }
 
@@ -658,8 +662,8 @@ mod tests {
     fn target_names_includes_every_planned_agent() {
         let names = targets::names();
         for required in [
-            "claude", "codex", "cursor", "windsurf", "cline", "continue", "kiro", "trae",
-            "aider", "gemini", "opencode", "factory", "amp", "generic",
+            "claude", "codex", "cursor", "windsurf", "cline", "continue", "kiro", "trae", "aider",
+            "gemini", "opencode", "factory", "amp", "generic",
         ] {
             assert!(names.contains(&required), "missing target: {required}");
         }
@@ -704,14 +708,20 @@ fn emit_report(mode: OutputMode, outcomes: &[TargetOutcome], dry_run: bool) {
             Status::Wrote => println!(
                 "Wrote {} → {}",
                 o.display,
-                o.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+                o.path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
             ),
             Status::UpToDate => println!("Already up to date: {}", o.display),
             Status::DryRun => {
                 println!(
                     "[dry-run] Would write {} → {}",
                     o.display,
-                    o.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+                    o.path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
                 );
                 println!("--- begin block ---");
                 println!("{}", o.body);

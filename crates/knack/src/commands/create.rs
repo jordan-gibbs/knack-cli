@@ -169,7 +169,12 @@ fn write_scaffold(
     description: &str,
     author_email: &str,
 ) -> Result<(), CliError> {
-    if dir.exists() && dir.read_dir().map(|mut i| i.next().is_some()).unwrap_or(false) {
+    if dir.exists()
+        && dir
+            .read_dir()
+            .map(|mut i| i.next().is_some())
+            .unwrap_or(false)
+    {
         return Err(CliError::User {
             code: "CREATE_SCAFFOLD_DIR_NOT_EMPTY".into(),
             message: format!("scaffold target {} is not empty", dir.display()),
@@ -389,15 +394,7 @@ mod tests {
         let dir = tmp.path().join("skill");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("existing.txt"), "stuff").unwrap();
-        let err = write_scaffold(
-            &dir,
-            "id",
-            "slug",
-            "Name",
-            "desc",
-            "u@example.com",
-        )
-        .unwrap_err();
+        let err = write_scaffold(&dir, "id", "slug", "Name", "desc", "u@example.com").unwrap_err();
         match err {
             CliError::User { code, .. } => assert_eq!(code, "CREATE_SCAFFOLD_DIR_NOT_EMPTY"),
             other => panic!("expected User error, got {other:?}"),

@@ -63,9 +63,7 @@ pub fn run(args: UpgradeArgs, mode: OutputMode) -> CliResult<()> {
 
     if !mode.quiet {
         if cfg!(target_os = "windows") && args.run {
-            println!(
-                "Self-replace is not safe on Windows (the running knack.exe is file-locked)."
-            );
+            println!("Self-replace is not safe on Windows (the running knack.exe is file-locked).");
             println!("Run this in a fresh PowerShell to upgrade:");
         } else if should_run {
             println!("Upgrading via:");

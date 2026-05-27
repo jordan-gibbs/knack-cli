@@ -57,9 +57,7 @@ pub async fn run(args: ForkArgs, client: ApiClient, mode: OutputMode) -> CliResu
                     "fork target must be in the form `@author/slug`, got `{}`",
                     args.handle_slug
                 ),
-                hint: Some(
-                    "example: `knack fork @knack/claude-api`".to_string(),
-                ),
+                hint: Some("example: `knack fork @knack/claude-api`".to_string()),
             };
             emit_err(mode, &err);
             return Err(err);
@@ -69,15 +67,14 @@ pub async fn run(args: ForkArgs, client: ApiClient, mode: OutputMode) -> CliResu
     // 2. Resolve the public skill_id via the anonymous marketplace
     //    detail endpoint. Works without sign-in for the lookup; the
     //    POST in step 3 then enforces auth.
-    let (source_id, _source_semver) = match api_skills::resolve_public(
-        &client, &author, &source_slug,
-    ).await {
-        Ok(t) => t,
-        Err(e) => {
-            emit_err(mode, &e);
-            return Err(e);
-        }
-    };
+    let (source_id, _source_semver) =
+        match api_skills::resolve_public(&client, &author, &source_slug).await {
+            Ok(t) => t,
+            Err(e) => {
+                emit_err(mode, &e);
+                return Err(e);
+            }
+        };
 
     // 3. Create the server-side fork. Body fields are optional; the
     //    server defaults to the original's slug + name when omitted.
@@ -180,11 +177,7 @@ pub async fn run(args: ForkArgs, client: ApiClient, mode: OutputMode) -> CliResu
         || {
             println!(
                 "✓ forked @{}/{} → @{}/{}  drafts/{}/",
-                author,
-                source_slug,
-                owner_handle,
-                new_skill.slug,
-                new_skill.slug,
+                author, source_slug, owner_handle, new_skill.slug, new_skill.slug,
             );
             println!("  edit then `knack publish {}` when ready", new_skill.slug);
         },

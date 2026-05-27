@@ -438,11 +438,7 @@ pub struct SkillFork {
 /// Fork a public skill into the caller's personal library. Returns the
 /// new Skill row (scope=personal, version=0.1.0, with
 /// `forked_from_skill_id` pointing back at the original).
-pub async fn fork(
-    client: &ApiClient,
-    skill_id: &str,
-    body: &SkillFork,
-) -> Result<Skill, CliError> {
+pub async fn fork(client: &ApiClient, skill_id: &str, body: &SkillFork) -> Result<Skill, CliError> {
     let path = format!("/skills/{skill_id}/fork");
     let body = serde_json::to_value(body)?;
     client

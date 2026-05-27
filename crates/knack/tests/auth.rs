@@ -187,7 +187,9 @@ async fn revoke_cli_token_calls_delete() {
         .mount(&server)
         .await;
 
-    api_auth::revoke_cli_token(&client, "tok_abc").await.unwrap();
+    api_auth::revoke_cli_token(&client, "tok_abc")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

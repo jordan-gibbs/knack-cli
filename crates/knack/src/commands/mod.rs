@@ -13,6 +13,7 @@ pub mod fork;
 pub mod info;
 pub mod init;
 pub mod install;
+pub mod interview;
 pub mod introspect;
 pub mod list;
 pub mod mark;
@@ -102,6 +103,11 @@ pub enum Command {
 
     /// Scaffold a workspace-local `.knack/` (skills/, drafts/, .gitignore, README).
     Init(init::InitArgs),
+
+    /// Agent-driven skill authoring. The agent runs the 6-phase interview;
+    /// this command writes the interview skill into the project and persists
+    /// session state between turns.
+    Interview(interview::InterviewArgs),
 
     /// Print the canonical Knack agent playbook (agent.txt). Offline-fallback bundled.
     Info(info::InfoArgs),
@@ -215,6 +221,7 @@ pub async fn dispatch(cmd: Command, client: ApiClient, mode: OutputMode) -> CliR
         Command::Uninstall(a) => uninstall::run(a, client, mode).await,
         Command::Upgrade(a) => upgrade::run(a, mode),
         Command::Init(a) => init::run(a, mode),
+        Command::Interview(a) => interview::run(a, mode).await,
         Command::Info(a) => info::run(a, mode).await,
         Command::Validate(a) => validate::run(a, mode),
         Command::Username(a) => username::run(a, client, mode).await,

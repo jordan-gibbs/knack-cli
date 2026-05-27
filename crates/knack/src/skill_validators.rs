@@ -76,7 +76,11 @@ pub fn validate_skill_folder(dir: &Path) -> ValidationReport {
     let mut report = ValidationReport::default();
 
     if !dir.is_dir() {
-        report.push("", format!("{} is not a directory", dir.display()), "not_a_dir");
+        report.push(
+            "",
+            format!("{} is not a directory", dir.display()),
+            "not_a_dir",
+        );
         return report;
     }
 
@@ -126,7 +130,11 @@ pub fn validate_skill_md(text: &str, report: &mut ValidationReport) {
     let parsed: serde_yaml::Value = match serde_yaml::from_str(&frontmatter) {
         Ok(v) => v,
         Err(e) => {
-            report.push("SKILL.md", format!("invalid YAML frontmatter: {e}"), "yaml_parse_error");
+            report.push(
+                "SKILL.md",
+                format!("invalid YAML frontmatter: {e}"),
+                "yaml_parse_error",
+            );
             return;
         }
     };
@@ -152,7 +160,10 @@ pub fn validate_skill_md(text: &str, report: &mut ValidationReport) {
             "too_long",
         );
     }
-    let description = map.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let description = map
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if description.is_empty() {
         report.push("SKILL.md/description", "missing or empty", "missing_field");
     } else if description.len() > 2000 {
@@ -182,7 +193,11 @@ pub fn validate_meta_yaml(text: &str, report: &mut ValidationReport) {
     let meta: MetaShape = match serde_yaml::from_str(text) {
         Ok(m) => m,
         Err(e) => {
-            report.push("meta.knack.yaml", format!("invalid YAML: {e}"), "yaml_parse_error");
+            report.push(
+                "meta.knack.yaml",
+                format!("invalid YAML: {e}"),
+                "yaml_parse_error",
+            );
             return;
         }
     };
@@ -205,11 +220,7 @@ pub fn validate_meta_yaml(text: &str, report: &mut ValidationReport) {
     }
 }
 
-fn require_non_empty(
-    field: &Option<String>,
-    path: &str,
-    report: &mut ValidationReport,
-) {
+fn require_non_empty(field: &Option<String>, path: &str, report: &mut ValidationReport) {
     let empty = match field {
         None => true,
         Some(s) => s.trim().is_empty(),
@@ -232,7 +243,9 @@ fn is_valid_slug(s: &str) -> bool {
 /// `None` if frontmatter is missing or unterminated.
 fn extract_frontmatter(text: &str) -> Option<String> {
     let trimmed = text.trim_start();
-    let rest = trimmed.strip_prefix("---\n").or_else(|| trimmed.strip_prefix("---\r\n"))?;
+    let rest = trimmed
+        .strip_prefix("---\n")
+        .or_else(|| trimmed.strip_prefix("---\r\n"))?;
     // End of frontmatter: a line containing only "---".
     let end = rest
         .split_inclusive('\n')

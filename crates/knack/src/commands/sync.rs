@@ -24,12 +24,7 @@ use crate::config::Config;
 use crate::errors::CliResult;
 use crate::output::{chatter, emit_ok, OutputMode};
 
-use super::install::{
-    installed,
-    installed::Scope,
-    shim,
-    targets,
-};
+use super::install::{installed, installed::Scope, shim, targets};
 
 #[derive(Debug, Args)]
 pub struct SyncArgs {
@@ -92,8 +87,12 @@ pub fn sync_one_skill(_slug: &str, _scope: Scope, _client_config: &Config) -> Sy
 fn purge_all(dry_run: bool) -> SyncReport {
     let mut report = SyncReport::default();
     for entry in installed::list().unwrap_or_default() {
-        let Some(target) = targets::find(&entry.slug) else { continue };
-        let Some(root) = (target.shim_root)(entry.scope) else { continue };
+        let Some(target) = targets::find(&entry.slug) else {
+            continue;
+        };
+        let Some(root) = (target.shim_root)(entry.scope) else {
+            continue;
+        };
         if dry_run {
             report.removed.push(ShimResult {
                 agent: entry.slug.clone(),

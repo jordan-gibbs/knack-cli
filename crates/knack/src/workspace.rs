@@ -46,7 +46,10 @@ pub const FOLDERS_INDEX_FILE: &str = "folders.json";
 /// Symmetric with `git rev-parse --show-toplevel` in spirit — a single
 /// `.knack/` checkpoint anywhere up the tree wins.
 pub fn discover_workspace_root(start: &Path) -> Option<PathBuf> {
-    let mut cur = start.canonicalize().ok().unwrap_or_else(|| start.to_path_buf());
+    let mut cur = start
+        .canonicalize()
+        .ok()
+        .unwrap_or_else(|| start.to_path_buf());
     loop {
         let candidate = cur.join(WORKSPACE_DIR_NAME);
         if candidate.is_dir() {
@@ -121,11 +124,7 @@ pub fn resolve_drafts_root(
 ///
 /// Used by ``knack publish``'s ``--from`` default so the agent rarely
 /// has to spell the path.
-pub fn resolve_existing_skill_dir(
-    slug: &str,
-    cwd: &Path,
-    home_fallback: &Path,
-) -> Option<PathBuf> {
+pub fn resolve_existing_skill_dir(slug: &str, cwd: &Path, home_fallback: &Path) -> Option<PathBuf> {
     if let Some(ws) = discover_workspace_root(cwd) {
         for sub in [DRAFTS_SUBDIR, SKILLS_SUBDIR] {
             let candidate = ws.join(sub).join(slug);
@@ -421,8 +420,7 @@ mod tests {
         let cwd = tempdir().unwrap();
         let target = PathBuf::from("/tmp/custom-target");
         let home = PathBuf::from("/home/jane/.knack/skills");
-        let resolved =
-            resolve_skills_root(cwd.path(), false, Some(&target), &home);
+        let resolved = resolve_skills_root(cwd.path(), false, Some(&target), &home);
         assert_eq!(resolved, target);
     }
 
@@ -444,7 +442,10 @@ mod tests {
 
         let resolved = resolve_skills_root(&nested, false, None, &home);
         let canonical_root = root.path().canonicalize().unwrap();
-        assert_eq!(resolved, canonical_root.join(WORKSPACE_DIR_NAME).join(SKILLS_SUBDIR));
+        assert_eq!(
+            resolved,
+            canonical_root.join(WORKSPACE_DIR_NAME).join(SKILLS_SUBDIR)
+        );
     }
 
     #[test]
@@ -483,8 +484,7 @@ mod tests {
         fs::create_dir_all(&skills).unwrap();
 
         let home = PathBuf::from("/nonexistent");
-        let resolved =
-            resolve_existing_skill_dir("foo", root.path(), &home).unwrap();
+        let resolved = resolve_existing_skill_dir("foo", root.path(), &home).unwrap();
         // `discover_workspace_root` canonicalizes on Unix (no-op) and
         // emits a `\\?\` UNC-prefixed path on Windows. Compare against
         // the same canonical form so the test passes everywhere.

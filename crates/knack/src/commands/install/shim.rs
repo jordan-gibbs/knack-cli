@@ -52,11 +52,7 @@ pub fn text_block_end(slug: &str) -> String {
 /// `canonical_md_path` is the absolute on-disk location of the source
 /// `.knack/skills/<slug>/SKILL.md` (the body the agent should load when
 /// the description triggers disclosure).
-pub fn render_native_skill(
-    slug: &str,
-    fm: &SkillFrontmatter,
-    canonical_md_path: &Path,
-) -> String {
+pub fn render_native_skill(slug: &str, fm: &SkillFrontmatter, canonical_md_path: &Path) -> String {
     let name = fm.name.as_deref().unwrap_or(slug);
     let description = fm
         .description
@@ -80,11 +76,7 @@ Invoke with: `knack run {slug}`
 }
 
 /// Render the body of a Cursor `.mdc` rule.
-pub fn render_native_rule(
-    slug: &str,
-    fm: &SkillFrontmatter,
-    canonical_md_path: &Path,
-) -> String {
+pub fn render_native_rule(slug: &str, fm: &SkillFrontmatter, canonical_md_path: &Path) -> String {
     let description = fm
         .description
         .as_deref()
@@ -106,10 +98,7 @@ Canonical: {path}
 /// Render the *body* of a TextBlock shim (no sentinels — those are added
 /// by [`upsert_skill_block`]).
 pub fn render_text_block(slug: &str, fm: &SkillFrontmatter) -> String {
-    let description = fm
-        .description
-        .as_deref()
-        .unwrap_or("(no description)");
+    let description = fm.description.as_deref().unwrap_or("(no description)");
     format!("- **{slug}** — {description}. Run: `knack run {slug}`")
 }
 
@@ -143,7 +132,10 @@ pub fn remove_native_skill(root: &Path, slug: &str) -> io::Result<bool> {
     // Best-effort dir cleanup. If the user dropped other files into the
     // shim folder we leave them; otherwise the empty dir is just
     // clutter.
-    if fs::read_dir(&dir).map(|mut it| it.next().is_none()).unwrap_or(false) {
+    if fs::read_dir(&dir)
+        .map(|mut it| it.next().is_none())
+        .unwrap_or(false)
+    {
         let _ = fs::remove_dir(&dir);
     }
     Ok(true)
@@ -266,7 +258,10 @@ pub fn remove_all_shims(target: &AgentTarget, root: &Path) -> io::Result<usize> 
                     continue;
                 }
                 let _ = fs::remove_file(&skill_md);
-                if fs::read_dir(&path).map(|mut it| it.next().is_none()).unwrap_or(false) {
+                if fs::read_dir(&path)
+                    .map(|mut it| it.next().is_none())
+                    .unwrap_or(false)
+                {
                     let _ = fs::remove_dir(&path);
                 }
                 removed += 1;
@@ -357,7 +352,10 @@ fn file_carries_sigil(path: &Path) -> bool {
     let Ok(s) = fs::read_to_string(path) else {
         return false;
     };
-    s.lines().next().map(|l| l.trim() == SHIM_SIGIL).unwrap_or(false)
+    s.lines()
+        .next()
+        .map(|l| l.trim() == SHIM_SIGIL)
+        .unwrap_or(false)
 }
 
 /// Return (block-start byte offset, block-end byte offset, end exclusive)

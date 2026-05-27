@@ -82,7 +82,10 @@ pub async fn invite(
 pub async fn accept(client: &ApiClient, invite_token: &str) -> Result<Team, CliError> {
     let body = serde_json::to_value(AcceptBody { invite_token })?;
     client
-        .send_json::<Team>(|c| Ok(c.request(Method::POST, "/teams/invites/accept")?.json(&body)))
+        .send_json::<Team>(|c| {
+            Ok(c.request(Method::POST, "/teams/invites/accept")?
+                .json(&body))
+        })
         .await
 }
 
