@@ -1,12 +1,18 @@
 [package]
 name = "knack-types"
-version.workspace = true
+# Independent of the CLI's workspace version. knack-types ships its own
+# semver on `knack-types-v*` tags via .github/workflows/publish-types.yml.
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://knack.ai"
 description = "Shared wire-format types and Backend trait for the Knack CLI ecosystem"
+readme = "README.md"
+keywords = ["knack", "cli", "skill", "agent", "anthropic"]
+categories = ["api-bindings", "command-line-utilities"]
 
 [dependencies]
 serde.workspace = true

@@ -9,7 +9,7 @@ repository.workspace = true
 description = "GitHub-backed Backend implementation for the Knack CLI"
 
 [dependencies]
-knack-types = { path = "../knack-types" }
+knack-types = { path = "../knack-types", version = "0.1" }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
