@@ -146,7 +146,9 @@ async fn finalize_login_to_pat(
     // is never persisted; we discard it as soon as the PAT lands.
     let jwt_client = client.clone().with_bearer_override(Some(access_jwt.into()));
 
-    let owned_label = label.map(str::to_owned).unwrap_or_else(|| format!("knack-cli@{}", host_label()));
+    let owned_label = label
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("knack-cli@{}", host_label()));
     let pat = api_auth::create_cli_token(&jwt_client, &owned_label, expires_in_days).await?;
 
     // Identify the user via /auth/me with the same JWT so we can cache
@@ -429,15 +431,14 @@ async fn status(client: ApiClient, mode: OutputMode) -> CliResult<()> {
     // ApiClient::current_access_token uses. We only surface info that's
     // relevant to whichever wins; the others are hidden so the output
     // doesn't lie about what's authenticating the request.
-    let (source, prefix, expires_in_secs, token_id) =
-        match resolve_status_source(&client)? {
-            Some(info) => info,
-            None => {
-                let err = CliError::AuthRequired;
-                emit_err(mode, &err);
-                return Err(err);
-            }
-        };
+    let (source, prefix, expires_in_secs, token_id) = match resolve_status_source(&client)? {
+        Some(info) => info,
+        None => {
+            let err = CliError::AuthRequired;
+            emit_err(mode, &err);
+            return Err(err);
+        }
+    };
 
     match api_auth::me(&client).await {
         Ok(me) => {
@@ -456,16 +457,13 @@ async fn status(client: ApiClient, mode: OutputMode) -> CliResult<()> {
                 }),
                 || {
                     let suffix = match source {
-                        BearerSource::PatFile => {
-                            ", token via ~/.knack/auth.json (manage at \
-                             getknack.ai/app/settings#cli-tokens)".to_string()
-                        }
+                        BearerSource::PatFile => ", token via ~/.knack/auth.json (manage at \
+                             getknack.ai/app/settings#cli-tokens)"
+                            .to_string(),
                         BearerSource::PatEnv => {
                             ", via KNACK_AUTH_TOKEN env (personal access token)".to_string()
                         }
-                        BearerSource::JwtEnv => {
-                            ", via KNACK_AUTH_TOKEN env (JWT)".to_string()
-                        }
+                        BearerSource::JwtEnv => ", via KNACK_AUTH_TOKEN env (JWT)".to_string(),
                         BearerSource::JwtFile => match expires_in_secs {
                             Some(s) if s > 0 => {
                                 format!(", JWT valid for {}", human_duration(s))
@@ -479,8 +477,9 @@ async fn status(client: ApiClient, mode: OutputMode) -> CliResult<()> {
                                  `knack auth login` to upgrade)",
                                 human_duration(s)
                             ),
-                            _ => ", legacy keyring JWT (re-run `knack auth login` to upgrade)"
-                                .into(),
+                            _ => {
+                                ", legacy keyring JWT (re-run `knack auth login` to upgrade)".into()
+                            }
                         },
                     };
                     println!("{} ({}){}", me.email, me.plan, suffix);
@@ -585,7 +584,11 @@ fn pat_display_prefix(token: &str) -> Option<String> {
     if !token.starts_with("knack_pat_") {
         return None;
     }
-    let cut = token.char_indices().nth(16).map(|(i, _)| i).unwrap_or(token.len());
+    let cut = token
+        .char_indices()
+        .nth(16)
+        .map(|(i, _)| i)
+        .unwrap_or(token.len());
     Some(token[..cut].to_string())
 }
 
@@ -614,11 +617,9 @@ async fn refresh(client: ApiClient, mode: OutputMode) -> CliResult<()> {
 
     match client.refresh_tokens().await {
         Ok(secs) => {
-            emit_ok(
-                mode,
-                json!({ "token_expires_in_seconds": secs }),
-                || println!("✓ refreshed, token valid for {}", human_duration(secs)),
-            );
+            emit_ok(mode, json!({ "token_expires_in_seconds": secs }), || {
+                println!("✓ refreshed, token valid for {}", human_duration(secs))
+            });
             Ok(())
         }
         Err(e) => {
@@ -709,7 +710,10 @@ mod tests {
     #[test]
     fn base64url_decode_basic() {
         // {"exp": 99} → eyJleHAiOiA5OX0
-        assert_eq!(base64url_decode("eyJleHAiOiA5OX0"), Some(b"{\"exp\": 99}".to_vec()));
+        assert_eq!(
+            base64url_decode("eyJleHAiOiA5OX0"),
+            Some(b"{\"exp\": 99}".to_vec())
+        );
     }
 
     #[test]

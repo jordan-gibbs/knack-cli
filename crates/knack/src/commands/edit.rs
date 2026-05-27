@@ -53,7 +53,9 @@ pub async fn run(args: EditArgs, client: ApiClient, mode: OutputMode) -> CliResu
             message:
                 "no fields supplied. pass at least one of --name / --description / --scope / --team"
                     .into(),
-            hint: Some("slug is immutable; if you want a different slug, create a new skill".into()),
+            hint: Some(
+                "slug is immutable; if you want a different slug, create a new skill".into(),
+            ),
         };
         emit_err(mode, &err);
         return Err(err);
@@ -174,7 +176,10 @@ async fn resolve_team(
         code: "TEAM_NOT_FOUND".into(),
         message: format!("you're not on a team called `{}`", input),
         hint: if slugs.is_empty() {
-            Some("you're not on any teams; create one in the workspace or accept an invite first".into())
+            Some(
+                "you're not on any teams; create one in the workspace or accept an invite first"
+                    .into(),
+            )
         } else {
             Some(format!("your teams: {}", slugs.join(", ")))
         },

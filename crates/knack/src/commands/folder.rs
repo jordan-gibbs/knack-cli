@@ -187,7 +187,12 @@ async fn create(args: CreateArgs, client: ApiClient, mode: OutputMode) -> CliRes
                     "scope": f.scope,
                     "owner_team_id": f.owner_team_id,
                 }),
-                || println!("✓ created folder {} (id: {}, scope: {})", f.name, f.id, f.scope),
+                || {
+                    println!(
+                        "✓ created folder {} (id: {}, scope: {})",
+                        f.name, f.id, f.scope
+                    )
+                },
             );
             Ok(())
         }
@@ -244,7 +249,8 @@ async fn reparent(args: ReparentArgs, client: ApiClient, mode: OutputMode) -> Cl
     if !args.root && args.new_parent.is_none() {
         let err = CliError::User {
             code: "REPARENT_NO_TARGET".into(),
-            message: "pass a new parent folder id/name, or --root to promote to the top level".into(),
+            message: "pass a new parent folder id/name, or --root to promote to the top level"
+                .into(),
             hint: Some("knack folder reparent <id-or-name> <parent-id-or-name> | --root".into()),
         };
         emit_err(mode, &err);
@@ -330,11 +336,9 @@ async fn rename(args: RenameArgs, client: ApiClient, mode: OutputMode) -> CliRes
     match api_folders::rename(&client, &folder.id, &args.new_name).await {
         Ok(f) => {
             sync_folder_rename_local(&f.id, &f.name);
-            emit_ok(
-                mode,
-                json!({ "id": f.id, "name": f.name }),
-                || println!("✓ renamed → {}", f.name),
-            );
+            emit_ok(mode, json!({ "id": f.id, "name": f.name }), || {
+                println!("✓ renamed → {}", f.name)
+            });
             Ok(())
         }
         Err(e) => {
@@ -365,7 +369,12 @@ async fn delete(args: DeleteArgs, client: ApiClient, mode: OutputMode) -> CliRes
             emit_ok(
                 mode,
                 json!({ "id": folder.id, "name": folder.name, "status": "deleted" }),
-                || println!("✓ deleted folder {} (contained skills are now unfiled)", folder.name),
+                || {
+                    println!(
+                        "✓ deleted folder {} (contained skills are now unfiled)",
+                        folder.name
+                    )
+                },
             );
             Ok(())
         }
@@ -415,9 +424,7 @@ async fn mv(args: MvArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> 
         let err = CliError::User {
             code: "MISSING_FOLDER".into(),
             message: "pass a folder name or --unfiled".into(),
-            hint: Some(
-                "knack folder mv <skill-slug> <folder-name> | --unfiled".into(),
-            ),
+            hint: Some("knack folder mv <skill-slug> <folder-name> | --unfiled".into()),
         };
         emit_err(mode, &err);
         return Err(err);

@@ -58,11 +58,7 @@ pub struct UninstallArgs {
     pub script: bool,
 }
 
-pub async fn run(
-    args: UninstallArgs,
-    client: ApiClient,
-    mode: OutputMode,
-) -> CliResult<()> {
+pub async fn run(args: UninstallArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> {
     if args.script {
         return run_script(mode);
     }

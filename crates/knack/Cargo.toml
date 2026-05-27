@@ -17,6 +17,10 @@ name = "knack_cli"
 path = "src/lib.rs"
 
 [dependencies]
+knack-types = { path = "../knack-types" }
+knack-backend-github = { path = "../knack-backend-github" }
+async-trait.workspace = true
+include_dir.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 tokio.workspace = true
@@ -43,6 +47,7 @@ hex.workspace = true
 tar.workspace = true
 flate2.workspace = true
 walkdir.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

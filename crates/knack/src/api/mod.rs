@@ -9,6 +9,7 @@
 //! this client.
 
 pub mod auth;
+pub mod cloud;
 pub mod feedback;
 pub mod folders;
 pub mod marketplace;
@@ -16,6 +17,8 @@ pub mod runs;
 pub mod skills;
 pub mod teams;
 pub mod users;
+
+pub use cloud::CloudBackend;
 
 use std::sync::{Arc, OnceLock};
 
@@ -62,7 +65,11 @@ fn maybe_print_notices_banner(headers: &reqwest::header::HeaderMap) {
     let Ok(text) = value.to_str() else {
         return;
     };
-    let tokens: Vec<&str> = text.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let tokens: Vec<&str> = text
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
     if tokens.iter().any(|t| *t == "feedback") && NOTICES_BANNER_PRINTED.set(()).is_ok() {
         // Stderr only — `--json` consumers reading stdout never see it.
         // Format is plain ASCII so it renders sanely in dumb terminals.
@@ -112,7 +119,11 @@ fn map_api_error_bytes(status: StatusCode, bytes: Option<&[u8]>) -> CliError {
         );
     }
     let text = std::str::from_utf8(bytes).unwrap_or("<binary body>").trim();
-    let snippet = if text.len() > 500 { format!("{}…", &text[..500]) } else { text.to_string() };
+    let snippet = if text.len() > 500 {
+        format!("{}…", &text[..500])
+    } else {
+        text.to_string()
+    };
     map_api_error(
         status,
         Some(ApiErrorBody {
@@ -333,10 +344,7 @@ impl ApiClient {
 
     /// Wire a legacy `TokenStore` (typically `KeyringStore`) as a read-only
     /// fallback consulted when the primary store has nothing.
-    pub fn with_legacy_store(
-        mut self,
-        legacy: Option<Arc<dyn TokenStore + Send + Sync>>,
-    ) -> Self {
+    pub fn with_legacy_store(mut self, legacy: Option<Arc<dyn TokenStore + Send + Sync>>) -> Self {
         self.legacy_store = legacy;
         self
     }
@@ -478,9 +486,9 @@ impl ApiClient {
             .store
             .load(&self.account)?
             .ok_or(CliError::AuthRequired)?;
-        let expires_at = stored.expires_at.ok_or_else(|| {
-            CliError::AuthFailed("refreshed credential has no expiry".into())
-        })?;
+        let expires_at = stored
+            .expires_at
+            .ok_or_else(|| CliError::AuthFailed("refreshed credential has no expiry".into()))?;
         Ok(expires_at - chrono::Utc::now().timestamp())
     }
 

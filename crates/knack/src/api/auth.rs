@@ -112,7 +112,10 @@ pub async fn create_cli_token(
     name: &str,
     expires_in_days: Option<i64>,
 ) -> Result<CreateCliTokenResponse, CliError> {
-    let body = serde_json::to_value(&CreateCliTokenRequest { name, expires_in_days })?;
+    let body = serde_json::to_value(&CreateCliTokenRequest {
+        name,
+        expires_in_days,
+    })?;
     client
         .send_json::<CreateCliTokenResponse>(|c| {
             Ok(c.request(Method::POST, "/me/cli-tokens")?.json(&body))

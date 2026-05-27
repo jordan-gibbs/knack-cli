@@ -74,9 +74,7 @@ pub async fn run(args: PublishArgs, client: ApiClient, mode: OutputMode) -> CliR
         let err = CliError::User {
             code: "PUBLISH_NO_FOLDER".into(),
             message: format!("not a directory: {}", dir.display()),
-            hint: Some(
-                "pass --from <dir> with a folder containing SKILL.md".into(),
-            ),
+            hint: Some("pass --from <dir> with a folder containing SKILL.md".into()),
         };
         emit_err(mode, &err);
         return Err(err);
@@ -115,7 +113,11 @@ pub async fn run(args: PublishArgs, client: ApiClient, mode: OutputMode) -> CliR
     // packed_s3_key. If the server is pre-V2a (404 on presign-bundle), fall
     // back to the legacy three-text-field path so an old API still works.
     let bundle_outcome = match try_publish_with_bundle(
-        &client, &skill.id, &next, parent_id.as_deref(), &dir,
+        &client,
+        &skill.id,
+        &next,
+        parent_id.as_deref(),
+        &dir,
     )
     .await
     {
@@ -244,7 +246,10 @@ fn dry_run(args: &PublishArgs, dir: &Path, mode: OutputMode) -> CliResult<()> {
         }
     };
 
-    let target_semver = args.as_version.clone().unwrap_or_else(|| "(server-assigned)".into());
+    let target_semver = args
+        .as_version
+        .clone()
+        .unwrap_or_else(|| "(server-assigned)".into());
 
     emit_ok(
         mode,

@@ -1,0 +1,120 @@
+name: release
+
+# Tag a commit `v<X.Y.Z>` (e.g. v0.6.0) and this builds the CLI for every
+# target triple and uploads tarball/zip assets to the GitHub Release.
+#
+# The install.sh / install.ps1 scripts read GitHub's releases/latest API
+# to resolve the current version, so a successful run of this workflow is
+# what makes a new version "live."
+#
+# Why a separate workflow from `ci`: ci runs on every PR; building four
+# targets per push is too slow for that loop.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.6.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Cut the GitHub Release first so all matrix jobs upload to the same one.
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.value }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ steps.tag.outputs.value }}" \
+            || gh release create "${{ steps.tag.outputs.value }}" \
+                 --draft \
+                 --title "knack ${{ steps.tag.outputs.version }}" \
+                 --generate-notes
+
+  # Build matrix: one job per target, each uploads its asset.
+  #
+  # We deliberately don't build a native aarch64-apple-darwin binary;
+  # M-series Macs run the x86_64 binary via Rosetta and macOS runner minutes
+  # cost 10x what Linux costs. install.sh rewrites aarch64-darwin to
+  # x86_64-darwin client-side. Re-add the arm64 target if Rosetta startup
+  # latency starts to matter for users.
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl-tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: knack
+          target: ${{ matrix.target }}
+          archive: knack-$target
+          tar: ${{ matrix.archive == 'tar.gz' && 'all' || 'none' }}
+          zip: ${{ matrix.archive == 'zip' && 'all' || 'none' }}
+          ref: refs/tags/${{ needs.create-release.outputs.tag }}
+          manifest_path: crates/knack/Cargo.toml
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish the release once all matrix builds succeed.
+  publish:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ needs.create-release.outputs.tag }}" --draft=false

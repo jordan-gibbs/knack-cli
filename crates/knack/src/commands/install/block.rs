@@ -8,7 +8,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-pub const START_MARKER: &str = "<!-- knack:start (managed by `knack install` — do not edit between markers) -->";
+pub const START_MARKER: &str =
+    "<!-- knack:start (managed by `knack install` — do not edit between markers) -->";
 pub const END_MARKER: &str = "<!-- knack:end -->";
 
 /// Splice `body` into the managed block at `path`. Creates the file (and any
@@ -164,7 +165,10 @@ mod tests {
         upsert(&path, make_body()).unwrap();
         let removed = remove(&path).unwrap();
         assert!(removed);
-        assert!(!path.exists(), "empty file should be deleted, not left as empty");
+        assert!(
+            !path.exists(),
+            "empty file should be deleted, not left as empty"
+        );
     }
 
     #[test]

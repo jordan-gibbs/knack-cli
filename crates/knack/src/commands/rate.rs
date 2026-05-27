@@ -50,11 +50,9 @@ pub async fn run(args: RateArgs, client: ApiClient, mode: OutputMode) -> CliResu
     if args.clear {
         match api_market::clear_rating(&client, &skill.id).await {
             Ok(()) => {
-                emit_ok(
-                    mode,
-                    json!({ "slug": args.slug, "cleared": true }),
-                    || println!("✓ cleared your rating for {}", args.slug),
-                );
+                emit_ok(mode, json!({ "slug": args.slug, "cleared": true }), || {
+                    println!("✓ cleared your rating for {}", args.slug)
+                });
                 return Ok(());
             }
             Err(e) => {

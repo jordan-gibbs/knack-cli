@@ -221,10 +221,7 @@ pub fn unpack_skill(tarball: &[u8], target_dir: &Path) -> Result<Manifest, CliEr
         if !entry.header().entry_type().is_file() {
             continue;
         }
-        let path = entry
-            .path()
-            .map_err(CliError::from)?
-            .into_owned();
+        let path = entry.path().map_err(CliError::from)?.into_owned();
         let arcname = posix_arcname(&path);
         check_safe_name(&arcname)?;
 
@@ -232,13 +229,12 @@ pub fn unpack_skill(tarball: &[u8], target_dir: &Path) -> Result<Manifest, CliEr
         entry.read_to_end(&mut data).map_err(CliError::from)?;
 
         if arcname == MANIFEST_PATH {
-            let parsed = Manifest::from_json(std::str::from_utf8(&data).map_err(|e| {
-                CliError::User {
+            let parsed =
+                Manifest::from_json(std::str::from_utf8(&data).map_err(|e| CliError::User {
                     code: "UNPACK_BAD_MANIFEST".into(),
                     message: format!("manifest is not utf-8: {e}"),
                     hint: None,
-                }
-            })?)?;
+                })?)?;
             manifest = Some(parsed);
         } else {
             members.insert(arcname, data);
@@ -344,9 +340,7 @@ pub struct SkillFrontmatter {
 /// Anything that doesn't open with `---` is treated as no-frontmatter
 /// and returns `Ok(None)`. Malformed YAML returns `Err` so callers can
 /// distinguish "no frontmatter to read" from "this skill is broken."
-pub fn parse_skill_md_frontmatter(
-    skill_md: &str,
-) -> Result<Option<SkillFrontmatter>, CliError> {
+pub fn parse_skill_md_frontmatter(skill_md: &str) -> Result<Option<SkillFrontmatter>, CliError> {
     // Tolerate BOM + leading blank lines; Anthropic's reference writers
     // sometimes prepend a UTF-8 BOM and most editors round-trip it.
     let trimmed = skill_md.trim_start_matches('\u{feff}').trim_start();
@@ -590,7 +584,8 @@ mod tests {
 
     #[test]
     fn parse_frontmatter_ignores_extra_fields() {
-        let body = "---\nname: x\ndescription: y\nversion: 1.2.3\nallowed-tools:\n  - Bash\n---\n\nBody\n";
+        let body =
+            "---\nname: x\ndescription: y\nversion: 1.2.3\nallowed-tools:\n  - Bash\n---\n\nBody\n";
         let parsed = parse_skill_md_frontmatter(body).unwrap().unwrap();
         assert_eq!(parsed.name.as_deref(), Some("x"));
     }

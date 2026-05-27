@@ -37,8 +37,16 @@ pub fn resolve_token() -> Result<GithubAuth> {
         });
     }
 
+    // Device-code OAuth fallback — runs against
+    // https://github.com/login/device. Not yet wired; surface a clean
+    // error pointing at `gh` as the supported path.
+    //
+    // To implement: POST to https://github.com/login/device/code with the
+    // OAuth client id; poll the access_token endpoint; cache the result.
+    // Stored as a GithubAuthRef variant in ~/.knack/auth.json.
+
     Err(anyhow!(
-        "no GitHub credentials. set GITHUB_TOKEN, install gh and run `gh auth login`, or run `knack auth login --github`"
+        "no GitHub credentials. install gh and run `gh auth login`, or set GITHUB_TOKEN"
     ))
 }
 

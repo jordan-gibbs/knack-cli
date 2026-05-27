@@ -439,7 +439,10 @@ fn windsurf_shim_root(scope: Scope) -> Option<PathBuf> {
     // conventional best-effort.
     let dir = match scope {
         Scope::Home => home_dir()?.join(".windsurf").join("skills"),
-        Scope::Project => std::env::current_dir().ok()?.join(".windsurf").join("skills"),
+        Scope::Project => std::env::current_dir()
+            .ok()?
+            .join(".windsurf")
+            .join("skills"),
     };
     Some(dir)
 }
@@ -488,7 +491,10 @@ fn opencode_shim_root(scope: Scope) -> Option<PathBuf> {
     // OpenCode: .opencode/skills/ workspace, ~/.config/opencode/skills/ user.
     let dir = match scope {
         Scope::Home => config_dir()?.join("opencode").join("skills"),
-        Scope::Project => std::env::current_dir().ok()?.join(".opencode").join("skills"),
+        Scope::Project => std::env::current_dir()
+            .ok()?
+            .join(".opencode")
+            .join("skills"),
     };
     Some(dir)
 }
@@ -497,7 +503,10 @@ fn factory_shim_root(scope: Scope) -> Option<PathBuf> {
     // Factory droid: ~/.factory/skills/ personal, .factory/skills/ workspace.
     let dir = match scope {
         Scope::Home => home_dir()?.join(".factory").join("skills"),
-        Scope::Project => std::env::current_dir().ok()?.join(".factory").join("skills"),
+        Scope::Project => std::env::current_dir()
+            .ok()?
+            .join(".factory")
+            .join("skills"),
     };
     Some(dir)
 }
@@ -518,5 +527,9 @@ fn amp_shim_root(scope: Scope) -> Option<PathBuf> {
 // pairs into that file. We surface the file path here so shim sync
 // has a single uniform interface.
 
-fn continue_shim_root(_: Scope) -> Option<PathBuf> { continue_path() }
-fn aider_shim_root(_: Scope) -> Option<PathBuf> { aider_path() }
+fn continue_shim_root(_: Scope) -> Option<PathBuf> {
+    continue_path()
+}
+fn aider_shim_root(_: Scope) -> Option<PathBuf> {
+    aider_path()
+}

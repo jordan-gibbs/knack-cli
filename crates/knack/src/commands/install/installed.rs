@@ -147,8 +147,7 @@ pub fn save(rec: &InstalledRecord) -> io::Result<()> {
 /// `claude/project` simultaneously if they ran install at both scopes).
 pub fn add(slug: &str, scope: Scope, path: PathBuf) -> io::Result<()> {
     let mut rec = load()?;
-    rec.agents
-        .retain(|e| !(e.slug == slug && e.scope == scope));
+    rec.agents.retain(|e| !(e.slug == slug && e.scope == scope));
     rec.agents.push(AgentEntry {
         slug: slug.to_string(),
         scope,
