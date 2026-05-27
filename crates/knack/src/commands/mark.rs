@@ -36,6 +36,12 @@ pub struct MarkArgs {
     /// Alias for `--note`. Spec uses `--reason` for failures.
     #[arg(long, conflicts_with = "note")]
     pub reason: Option<String>,
+
+    /// Output file path. Repeatable: pass `--output` once per file the run
+    /// produced. Captured into the run's `outputs` array in the telemetry
+    /// log so a future audit knows what artifacts came out.
+    #[arg(long)]
+    pub output: Vec<std::path::PathBuf>,
 }
 
 pub async fn run(args: MarkArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> {
@@ -53,9 +59,21 @@ pub async fn run(args: MarkArgs, client: ApiClient, mode: OutputMode) -> CliResu
     };
 
     let note = args.note.clone().or(args.reason.clone());
+    let outputs: Vec<String> = args
+        .output
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
 
     if let BackendMode::Github { local_path, .. } = &client.config.backend {
-        return github_mark(&args.run_id, &status, note.as_deref(), local_path, mode);
+        return github_mark(
+            &args.run_id,
+            &status,
+            note.as_deref(),
+            &outputs,
+            local_path,
+            mode,
+        );
     }
     let result = api_runs::mark(
         &client,
@@ -92,10 +110,11 @@ fn github_mark(
     run_id: &str,
     status: &str,
     note: Option<&str>,
+    outputs: &[String],
     local_path: &std::path::Path,
     mode: OutputMode,
 ) -> CliResult<()> {
-    match knack_backend_github::mark_run(local_path, run_id, status, note) {
+    match knack_backend_github::mark_run(local_path, run_id, status, note, outputs) {
         Ok(snapshot) => {
             emit_ok(
                 mode,
@@ -105,12 +124,22 @@ fn github_mark(
                     "note": snapshot.note,
                     "skill": snapshot.skill,
                     "version": snapshot.version,
+                    "agent": snapshot.agent,
+                    "inputs": snapshot.inputs,
+                    "outputs": snapshot.outputs,
                     "started_at": snapshot.started_at,
                     "completed_at": snapshot.completed_at,
+                    "duration_ms": snapshot.duration_ms,
                     "backend": "github",
                 }),
                 || {
                     println!("✓ marked {} {}", snapshot.run_id, snapshot.status);
+                    if let Some(ms) = snapshot.duration_ms {
+                        println!("  duration: {} ms", ms);
+                    }
+                    if !snapshot.outputs.is_empty() {
+                        println!("  outputs: {}", snapshot.outputs.join(", "));
+                    }
                     if let Some(n) = &snapshot.note {
                         println!("  note: {n}");
                     }

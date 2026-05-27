@@ -17,18 +17,25 @@
 //!   * `version`   (set on `started`) — semver at the time of the run.
 //!   * `agent`     (set on `started`) — caller-supplied tag
 //!                 ("claude-code", "cursor", "codex", ...).
-//!   * `input`     (set on `started`) — path or short summary of the input.
-//!   * `status`    (set on every event) — "started" | "succeeded" | "failed"
-//!                 | "aborted".
+//!   * `inputs`    (set on `started`) — array of file paths or short
+//!                 summaries describing what the agent worked on.
+//!                 Empty array if the run had no input.
+//!   * `outputs`   (set on `marked`) — array of file paths or summaries
+//!                 describing what the run produced.
+//!   * `status`    (set on every event) — "started" | "succeeded" |
+//!                 "failed" | "aborted".
 //!   * `note`      (set on `marked` when --note / --reason was passed) —
 //!                 free-form text. For "failed", explain what went wrong.
 //!
 //! **Lifecycle.** A run goes through two events:
 //!
-//!   1. `knack run <slug>` writes a `started` event and prints the
-//!      generated `run_id`.
-//!   2. `knack mark <run_id> succeeded|failed [--note …]` writes a
-//!      `marked` event that closes the loop.
+//!   1. `knack run <slug> [--input PATH]...` writes a `started` event and
+//!      prints the generated `run_id`. `--input` is repeatable.
+//!   2. `knack mark <run_id> succeeded|failed [--note …] [--output PATH]...`
+//!      writes a `marked` event that closes the loop.
+//!
+//! [`RunSnapshot`] (built by [`find_run`]) also computes a `duration_ms`
+//! field from `started_at` to `completed_at` so consumers don't have to.
 //!
 //! **Lookback.** [`find_run`] scans the last [`LOOKBACK_DAYS`] of daily
 //! files (newest first). A `marked` event is considered authoritative;
@@ -43,7 +50,9 @@
 //!
 //! **Tolerance.** The reader skips lines it can't parse (malformed,
 //! truncated, or a legacy [`knack_types::RunLog`] line from an older
-//! binary) so a stray line doesn't break `find_run`.
+//! binary) so a stray line doesn't break `find_run`. The reader also
+//! migrates the pre-v0.7.2 single-`input` field into `inputs: [...]` on
+//! the fly so older files keep working.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Duration, Utc};
@@ -60,10 +69,7 @@ const LOOKBACK_DAYS: i64 = 30;
 ///
 /// Converts the legacy `RunLog` into the canonical [`RunEvent`] shape so
 /// every line in the JSONL has the same schema regardless of which writer
-/// produced it. `RunLog` represents a completed run (it has both start
-/// time and final status), so this writes a single `marked` event that
-/// implies the prior `started` (which `Backend::record_run` callers don't
-/// produce separately).
+/// produced it.
 pub fn append_run(repo: &Path, log: &RunLog) -> Result<()> {
     let status = match log.status {
         knack_types::RunStatus::Succeeded => "succeeded",
@@ -76,7 +82,8 @@ pub fn append_run(repo: &Path, log: &RunLog) -> Result<()> {
         skill: Some(log.skill.clone()),
         version: None,
         agent: Some(log.agent.clone()),
-        input: None,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
         status: Some(status.into()),
         note: None,
         at: log.started_at,
@@ -86,22 +93,25 @@ pub fn append_run(repo: &Path, log: &RunLog) -> Result<()> {
 }
 
 /// One JSONL record. The `event` field discriminates between `started` and
-/// `marked`. Untagged fields are optional and depend on the event type.
+/// `marked`. Other fields are populated as documented in the module-level
+/// schema comment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunEvent {
     pub event: String, // "started" | "marked"
     pub run_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     pub at: DateTime<Utc>,
 }
@@ -113,11 +123,15 @@ pub struct RunSnapshot {
     pub skill: Option<String>,
     pub version: Option<String>,
     pub agent: Option<String>,
-    pub input: Option<String>,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
     pub status: String, // "started" | "succeeded" | "failed" | "aborted"
     pub note: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    /// Convenience field computed from `completed_at - started_at` when both
+    /// are present. Saves consumers from doing the subtraction.
+    pub duration_ms: Option<u64>,
 }
 
 /// Write a "started" event and return the generated run id.
@@ -126,7 +140,7 @@ pub fn start_run(
     slug: &str,
     version: &str,
     agent: Option<&str>,
-    input: Option<&str>,
+    inputs: &[String],
 ) -> Result<Uuid> {
     let run_id = Uuid::new_v4();
     let now = Utc::now();
@@ -136,7 +150,8 @@ pub fn start_run(
         skill: Some(slug.to_string()),
         version: Some(version.to_string()),
         agent: agent.map(|s| s.to_string()),
-        input: input.map(|s| s.to_string()),
+        inputs: inputs.to_vec(),
+        outputs: Vec::new(),
         status: Some("started".into()),
         note: None,
         at: now,
@@ -146,13 +161,15 @@ pub fn start_run(
     Ok(run_id)
 }
 
-/// Append a "marked" event for an existing run. Returns the new snapshot.
-/// Errors if the run id can't be found within the lookback window.
+/// Append a "marked" event for an existing run. Returns the new snapshot
+/// with computed duration. Errors if the run id can't be found within the
+/// lookback window.
 pub fn mark_run(
     repo: &Path,
     run_id: &str,
     status: &str,
     note: Option<&str>,
+    outputs: &[String],
 ) -> Result<RunSnapshot> {
     let existing = find_run(repo, run_id)?.ok_or_else(|| {
         anyhow::anyhow!("run {} not found in last {} days", run_id, LOOKBACK_DAYS)
@@ -165,7 +182,10 @@ pub fn mark_run(
         skill: existing.skill.clone(),
         version: existing.version.clone(),
         agent: existing.agent.clone(),
-        input: existing.input.clone(),
+        // Inputs propagate from the started event so the marked line is
+        // self-contained for grep-style audits.
+        inputs: existing.inputs.clone(),
+        outputs: outputs.to_vec(),
         status: Some(status.to_string()),
         note: note.map(|s| s.to_string()),
         at: now,
@@ -173,16 +193,22 @@ pub fn mark_run(
     let line = serde_json::to_string(&event).context("serialize marked event")?;
     append_to_day_file(repo, &now, &line)?;
 
+    let duration_ms = existing
+        .started_at
+        .and_then(|start| (now - start).num_milliseconds().try_into().ok());
+
     Ok(RunSnapshot {
         run_id: run_id.into(),
         skill: existing.skill,
         version: existing.version,
         agent: existing.agent,
-        input: existing.input,
+        inputs: existing.inputs,
+        outputs: outputs.to_vec(),
         status: status.into(),
         note: note.map(|s| s.into()),
         started_at: existing.started_at,
         completed_at: Some(now),
+        duration_ms,
     })
 }
 
@@ -197,9 +223,6 @@ pub fn find_run(repo: &Path, run_id: &str) -> Result<Option<RunSnapshot>> {
     let today = Utc::now().date_naive();
     let mut snapshot: Option<RunSnapshot> = None;
 
-    // Walk newest -> oldest so we encounter the latest event first and can
-    // cheaply update `status`/`completed_at` if we see an earlier `started`
-    // for the same id later.
     for offset in 0..=LOOKBACK_DAYS {
         let date = today - Duration::days(offset);
         let file = day_file(repo, date.year(), date.month(), date.day());
@@ -217,7 +240,7 @@ pub fn find_run(repo: &Path, run_id: &str) -> Result<Option<RunSnapshot>> {
             if line.trim().is_empty() {
                 continue;
             }
-            let Ok(ev) = serde_json::from_str::<RunEvent>(&line) else {
+            let Some(ev) = parse_event_line(&line) else {
                 continue; // tolerate legacy RunLog lines and malformed entries
             };
             if ev.run_id != run_id {
@@ -226,7 +249,38 @@ pub fn find_run(repo: &Path, run_id: &str) -> Result<Option<RunSnapshot>> {
             snapshot = Some(merge_event(snapshot.take(), ev));
         }
     }
-    Ok(snapshot)
+    Ok(snapshot.map(finalize_duration))
+}
+
+/// Parse a JSONL line into a `RunEvent`, migrating the pre-v0.7.2 single
+/// `input: "<path>"` field into `inputs: ["<path>"]` on the fly so old
+/// files keep working with the new readers.
+fn parse_event_line(line: &str) -> Option<RunEvent> {
+    let mut value: serde_json::Value = serde_json::from_str(line).ok()?;
+    if let Some(obj) = value.as_object_mut() {
+        if !obj.contains_key("inputs") {
+            if let Some(legacy) = obj.remove("input") {
+                if let Some(s) = legacy.as_str() {
+                    obj.insert(
+                        "inputs".into(),
+                        serde_json::Value::Array(vec![serde_json::Value::String(s.into())]),
+                    );
+                }
+            }
+        }
+    }
+    serde_json::from_value(value).ok()
+}
+
+fn finalize_duration(mut s: RunSnapshot) -> RunSnapshot {
+    if s.duration_ms.is_none() {
+        if let (Some(start), Some(end)) = (s.started_at, s.completed_at) {
+            if let Ok(ms) = (end - start).num_milliseconds().try_into() {
+                s.duration_ms = Some(ms);
+            }
+        }
+    }
+    s
 }
 
 fn merge_event(prior: Option<RunSnapshot>, ev: RunEvent) -> RunSnapshot {
@@ -235,14 +289,16 @@ fn merge_event(prior: Option<RunSnapshot>, ev: RunEvent) -> RunSnapshot {
         skill: None,
         version: None,
         agent: None,
-        input: None,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
         status: "unknown".into(),
         note: None,
         started_at: None,
         completed_at: None,
+        duration_ms: None,
     });
-    // First non-None wins for identity fields. This handles the case where
-    // a `marked` event lands before its `started` in the chronological scan
+    // First non-empty / non-None wins for identity fields. Handles the case
+    // where a `marked` event lands before its `started` in the scan order
     // (defensive against clock skew).
     if s.skill.is_none() {
         s.skill = ev.skill;
@@ -253,8 +309,11 @@ fn merge_event(prior: Option<RunSnapshot>, ev: RunEvent) -> RunSnapshot {
     if s.agent.is_none() {
         s.agent = ev.agent;
     }
-    if s.input.is_none() {
-        s.input = ev.input;
+    if s.inputs.is_empty() {
+        s.inputs = ev.inputs;
+    }
+    if s.outputs.is_empty() && !ev.outputs.is_empty() {
+        s.outputs = ev.outputs;
     }
 
     match ev.event.as_str() {

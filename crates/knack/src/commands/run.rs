@@ -35,10 +35,11 @@ pub struct RunArgs {
     /// attributed to that historical version instead of the current one.
     pub slug: String,
 
-    /// Input file path. Captured as part of the Run's `inputs_summary` so
-    /// the telemetry timeline shows what the agent worked on.
+    /// Input file path. Repeatable: pass `--input` once per file the agent
+    /// will work on. Captured into the run's `inputs` array so the telemetry
+    /// timeline shows exactly what was read.
     #[arg(long)]
-    pub input: Option<PathBuf>,
+    pub input: Vec<PathBuf>,
 
     /// Free-form tag for the calling agent (e.g. "claude-code", "cursor",
     /// "codex", "cowork"). Stored as metadata on the Run row so multiple
@@ -101,12 +102,22 @@ pub async fn run(args: RunArgs, client: ApiClient, mode: OutputMode) -> CliResul
 
     let runtime = args.runtime.clone().unwrap_or_else(|| "agent".to_string());
 
-    let inputs_summary = args.input.as_ref().map(|p| {
-        json!({
-            "path": p,
-            "filename": p.file_name().and_then(|s| s.to_str()),
-        })
-    });
+    // Cloud's `inputs_summary` is a free-form structured field. Pack the
+    // (possibly multiple) --input paths into an array of {path, filename}.
+    let inputs_summary = if args.input.is_empty() {
+        None
+    } else {
+        Some(json!({
+            "files": args
+                .input
+                .iter()
+                .map(|p| json!({
+                    "path": p,
+                    "filename": p.file_name().and_then(|s| s.to_str()),
+                }))
+                .collect::<Vec<_>>(),
+        }))
+    };
 
     let run = api_runs::start(
         &client,
@@ -177,14 +188,14 @@ fn github_run(args: &RunArgs, local_path: &std::path::Path, mode: OutputMode) ->
     };
 
     let agent_tag = args.runtime.clone().or_else(|| Some("agent".to_string()));
-    let input_repr = args.input.as_ref().map(|p| p.display().to_string());
+    let inputs: Vec<String> = args.input.iter().map(|p| p.display().to_string()).collect();
 
     let run_id = match knack_backend_github::start_run(
         local_path,
         slug,
         &version,
         agent_tag.as_deref(),
-        input_repr.as_deref(),
+        &inputs,
     ) {
         Ok(id) => id,
         Err(e) => {
@@ -206,7 +217,7 @@ fn github_run(args: &RunArgs, local_path: &std::path::Path, mode: OutputMode) ->
             "slug": slug,
             "version": version,
             "agent": agent_tag,
-            "input": input_repr,
+            "inputs": inputs,
             "status": "started",
             "backend": "github",
             "log_file": day_file.display().to_string(),

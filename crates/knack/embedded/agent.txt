@@ -960,8 +960,13 @@ The flow is four steps:
   3. REGISTER THE RUN.
        knack run <slug> --input <path-to-input-file>
      This prints `run-id: <uuid>` and exits. The Run is now recorded
-     on the server with status=running. NO CODE EXECUTES. NO AGENT IS
-     INVOKED. The CLI's job here is purely "open a telemetry record."
+     (server-side in cloud mode; in <local>/runs/YYYY-MM/YYYY-MM-DD.jsonl
+     in self-host mode) with status=started. NO CODE EXECUTES. NO AGENT
+     IS INVOKED. The CLI's job here is purely "open a telemetry record."
+
+     `--input` is REPEATABLE. If the skill reads multiple files, pass
+     `--input` once per file:
+       knack run <slug> --input ./a.csv --input ./b.csv --input ./c.csv
 
      To pin to a specific historical version (regression check against
      a last-known-good build):
@@ -982,9 +987,19 @@ The flow is four steps:
   5. CLOSE THE LOOP.
        knack mark <run-id> succeeded
        knack mark <run-id> failed --note "<what went wrong>"
+
+     `--output` is REPEATABLE. If the run produced files, record each
+     one so the telemetry log knows what came out:
+       knack mark <run-id> succeeded \
+         --output ./out/report.pdf \
+         --output ./out/summary.md \
+         --note "clean run, 3 files in scope"
+
      Marking is what closes the telemetry loop so the user (and the
      skill author) can see what's working over time. Status is a
-     positional arg now — examples above work as written.
+     positional arg now — examples above work as written. The CLI
+     computes `duration_ms` automatically from started_at to the mark
+     time, so you don't pass it.
 
 
 === PART SEVEN (OPTIONAL): SHARING + DISCOVERY ===
