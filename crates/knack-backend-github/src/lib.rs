@@ -7,8 +7,11 @@
 mod auth;
 mod backend;
 mod bootstrap;
-mod runs;
+mod external;
+pub mod runs;
 
 pub use auth::{resolve_token, GithubAuth};
 pub use backend::GithubBackend;
 pub use bootstrap::{bootstrap_repo, BootstrapOpts, BootstrapResult, Visibility};
+pub use external::{parse_spec, pull_external, ExternalSpec};
+pub use runs::{find_run, mark_run, start_run, RunSnapshot};

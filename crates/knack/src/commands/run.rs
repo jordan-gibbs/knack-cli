@@ -24,6 +24,7 @@ use serde_json::json;
 
 use crate::api::runs as api_runs;
 use crate::api::{skills as api_skills, ApiClient};
+use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
 use crate::output::{chatter, emit_err, emit_ok, OutputMode};
 
@@ -62,6 +63,10 @@ pub struct RunArgs {
 }
 
 pub async fn run(args: RunArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> {
+    if let BackendMode::Github { local_path, .. } = &client.config.backend {
+        return github_run(&args, local_path, mode);
+    }
+
     let (slug, version_filter) = crate::slug::parse_slug_at_version(&args.slug);
 
     let skill = match api_skills::find_by_slug(&client, slug).await? {
@@ -150,4 +155,82 @@ pub async fn run(args: RunArgs, client: ApiClient, mode: OutputMode) -> CliResul
 mod tests {
     // Behavior tests live in tests/runs.rs (the wiremock integration suite).
     // The command's logic is the API call + a slug parse, both covered there.
+}
+
+fn github_run(args: &RunArgs, local_path: &std::path::Path, mode: OutputMode) -> CliResult<()> {
+    let (slug, version_filter) = crate::slug::parse_slug_at_version(&args.slug);
+
+    // Resolve the skill from the local clone and read its current version
+    // from meta.knack.yaml. If --slug@version was passed, prefer that.
+    let skill_dir = local_path.join("skills").join(slug);
+    if !skill_dir.is_dir() {
+        let err = CliError::NotFound(format!(
+            "skill `{slug}` not found in {}",
+            local_path.display()
+        ));
+        emit_err(mode, &err);
+        return Err(err);
+    }
+    let version = match version_filter {
+        Some(v) => v.trim_start_matches('v').to_string(),
+        None => read_meta_version(&skill_dir).unwrap_or_else(|_| "0.0.0".to_string()),
+    };
+
+    let agent_tag = args.runtime.clone().or_else(|| Some("agent".to_string()));
+    let input_repr = args.input.as_ref().map(|p| p.display().to_string());
+
+    let run_id = match knack_backend_github::start_run(
+        local_path,
+        slug,
+        &version,
+        agent_tag.as_deref(),
+        input_repr.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            let err = CliError::Internal(format!("record run: {e}"));
+            emit_err(mode, &err);
+            return Err(err);
+        }
+    };
+
+    let day_file = local_path
+        .join("runs")
+        .join(format!("{}", chrono::Utc::now().format("%Y-%m")))
+        .join(format!("{}.jsonl", chrono::Utc::now().format("%Y-%m-%d")));
+
+    emit_ok(
+        mode,
+        json!({
+            "run_id": run_id.to_string(),
+            "slug": slug,
+            "version": version,
+            "agent": agent_tag,
+            "input": input_repr,
+            "status": "started",
+            "backend": "github",
+            "log_file": day_file.display().to_string(),
+        }),
+        || {
+            println!("✓ {} run-id: {}", slug, run_id);
+            println!("  recorded to {}", day_file.display());
+            println!();
+            println!(
+                "close the loop with: knack mark {} succeeded   (or `failed --reason …`)",
+                run_id
+            );
+        },
+    );
+    Ok(())
+}
+
+fn read_meta_version(skill_dir: &std::path::Path) -> Result<String, std::io::Error> {
+    let bytes = std::fs::read(skill_dir.join("meta.knack.yaml"))?;
+    let parsed: serde_yaml::Value = serde_yaml::from_slice(&bytes)
+        .map_err(|e| std::io::Error::other(format!("parse meta: {e}")))?;
+    Ok(parsed
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0.0.0")
+        .to_string())
 }

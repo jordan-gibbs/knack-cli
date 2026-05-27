@@ -9,6 +9,7 @@ use tokio::time::sleep;
 use crate::api::auth as api_auth;
 use crate::api::ApiClient;
 use crate::auth_store::StoredCredential;
+use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
 use crate::output::{chatter, emit_err, emit_ok, OutputMode};
 
@@ -63,6 +64,26 @@ pub struct LoginArgs {
 }
 
 pub async fn run(cmd: AuthCmd, client: ApiClient, mode: OutputMode) -> CliResult<()> {
+    // In github self-host mode the cloud auth surface is meaningless. Route
+    // status to a backend-aware printer and turn login/refresh into clean
+    // no-ops so an agent following the playbook doesn't get stuck on
+    // AUTH_REQUIRED. Logout still runs through the cloud path so a stale
+    // pre-migration token gets cleared.
+    if let BackendMode::Github {
+        owner,
+        repo,
+        local_path,
+    } = &client.config.backend
+    {
+        match cmd {
+            AuthCmd::Login(_) => return github_login_noop(mode),
+            AuthCmd::Status => {
+                return github_status(owner, repo, local_path, mode);
+            }
+            AuthCmd::Refresh => return github_refresh_noop(mode),
+            AuthCmd::Logout => { /* fall through, clear any cloud token */ }
+        }
+    }
     match cmd {
         AuthCmd::Login(a) => {
             if a.start {
@@ -77,6 +98,77 @@ pub async fn run(cmd: AuthCmd, client: ApiClient, mode: OutputMode) -> CliResult
         AuthCmd::Status => status(client, mode).await,
         AuthCmd::Refresh => refresh(client, mode).await,
     }
+}
+
+fn github_login_noop(mode: OutputMode) -> CliResult<()> {
+    emit_ok(
+        mode,
+        json!({
+            "backend": "github",
+            "needs_signin": false,
+            "message": "self-host mode does not require sign-in",
+        }),
+        || {
+            println!("self-host mode does not require sign-in.");
+            println!();
+            println!("github auth is handled by `gh auth login` (already set up if `knack init --self-host` succeeded).");
+            println!(
+                "to switch to Knack Cloud, run `knack init --cloud` and then `knack auth login`."
+            );
+        },
+    );
+    Ok(())
+}
+
+fn github_refresh_noop(mode: OutputMode) -> CliResult<()> {
+    emit_ok(
+        mode,
+        json!({
+            "backend": "github",
+            "refreshed": false,
+            "message": "nothing to refresh in self-host mode",
+        }),
+        || {
+            println!("self-host mode does not maintain a refreshable session.");
+        },
+    );
+    Ok(())
+}
+
+fn github_status(
+    owner: &str,
+    repo: &str,
+    local_path: &std::path::Path,
+    mode: OutputMode,
+) -> CliResult<()> {
+    let gh_user = crate::commands::init::resolve_gh_user_opt();
+    let clone_present = local_path.join(".git").exists();
+    emit_ok(
+        mode,
+        json!({
+            "backend": "github",
+            "owner": owner,
+            "repo": repo,
+            "local_path": local_path.display().to_string(),
+            "local_clone_present": clone_present,
+            "gh_user": gh_user,
+            "needs_signin": false,
+        }),
+        || {
+            println!("backend:     github (self-host)");
+            println!("repo:        {}/{}", owner, repo);
+            println!(
+                "local clone: {}{}",
+                local_path.display(),
+                if clone_present { "" } else { "  (missing)" }
+            );
+            match &gh_user {
+                Some(u) => println!("gh user:     {}", u),
+                None => println!("gh user:     (not signed in via gh; run `gh auth login`)"),
+            }
+        },
+    );
+    Ok(())
 }
 
 /// Stateless step 1: kick off the device flow and return the user-visible

@@ -224,7 +224,65 @@ it does auth, list, pull, publish, run, and that's it. Authoring is your job.
    handles registration without sandbox friction. No extra step
    needed.
 
-2. SIGN IN
+2. PICK A BACKEND (do this BEFORE auth)
+
+   knack runs in one of two modes. Ask the user which they want BEFORE you
+   touch sign-in:
+
+     a) Self-host (GitHub). Skills live in a private GitHub repo under the
+        user's account. No knack.ai sign-in required. The CLI uses `gh`
+        for authentication and stores everything locally. Free, forever.
+
+     b) Knack Cloud. Skills live on api.getknack.ai. Public marketplace,
+        team features (sharing, roles, audit log, SSO). Requires browser
+        OAuth sign-in.
+
+   Check if a backend is already configured:
+     macOS / Linux:  test -f ~/.knack/config.yaml && cat ~/.knack/config.yaml
+     Windows:        Test-Path "$HOME\.knack\config.yaml" -and (Get-Content "$HOME\.knack\config.yaml")
+
+   If config.yaml exists with `mode: github` -> skip this whole step;
+   self-host is already set up.
+   If config.yaml exists with `mode: cloud`  -> skip to step 3 (SIGN IN).
+   Otherwise: ASK THE USER which mode they want, then run knack init
+   non-interactively with explicit flags. Never run bare `knack init` --
+   it will try to prompt for backend/repo and HANG in non-TTY shells.
+
+   --- SELF-HOST (GitHub) ---
+
+   Prerequisite: `gh auth status` must show the user authenticated. If not,
+   ask the user to run `gh auth login` themselves (it needs a browser); do
+   NOT try to do it for them.
+
+   Then bootstrap the skill repo:
+     knack init --self-host --github-repo <owner>/<repo-name> --visibility private
+
+   Defaults:
+     - <owner> is the user's gh handle (resolved via `gh api user`)
+     - Common <repo-name> values: `knack-skills`, `my-skills`, or anything
+       the user prefers. ASK THE USER for the name; don't pick one for them.
+     - `--visibility private` is the safe default. Pass `--visibility public`
+       only if the user explicitly asks.
+
+   What this does, in one shot:
+     - Creates github.com/<owner>/<repo-name> if it doesn't exist
+     - Clones it locally to ~/<repo-name> (or --local-path)
+     - Scaffolds skills/, runs/, knack.yaml, README.md, .gitignore
+     - Makes the initial commit and pushes to origin/main
+     - Writes ~/.knack/config.yaml so future commands know to use github
+
+   After this succeeds, SKIP step 3 (SIGN IN) entirely. Self-host mode does
+   not use knack.ai auth. `knack auth login` is a friendly no-op in this
+   mode; `knack auth status` reports your gh user and backend config.
+
+   --- KNACK CLOUD ---
+
+     knack init --cloud
+
+   Then proceed to step 3 (SIGN IN) for the OAuth sign-in flow.
+
+
+3. SIGN IN (CLOUD MODE ONLY — skip if you picked self-host above)
 
    FIRST identify yourself by env var. Different runtimes need different
    flows:

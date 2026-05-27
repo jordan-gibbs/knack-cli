@@ -18,6 +18,7 @@ use clap::Args;
 use serde_json::json;
 
 use crate::api::{skills as api_skills, ApiClient};
+use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
 use crate::output::{chatter, emit_err, emit_ok, OutputMode};
 use crate::skill_pack::unpack_skill;
@@ -42,6 +43,10 @@ pub struct PullArgs {
 }
 
 pub async fn run(args: PullArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> {
+    if let BackendMode::Github { local_path, .. } = &client.config.backend {
+        return github_pull(&args, local_path, &client.config.skills_dir, mode).await;
+    }
+
     let (slug, version_filter) = crate::slug::parse_slug_at_version(&args.slug_at_version);
 
     let skill = match api_skills::find_by_slug(&client, slug).await {
@@ -249,4 +254,104 @@ mod tests {
         assert_eq!(written.len(), 1);
         assert!(p.exists());
     }
+}
+
+async fn github_pull(
+    args: &PullArgs,
+    local_path: &std::path::Path,
+    home_skills_dir: &std::path::Path,
+    mode: OutputMode,
+) -> CliResult<()> {
+    use knack_backend_github::GithubBackend;
+    use knack_types::Backend;
+
+    let spec = args.slug_at_version.clone();
+
+    // `@owner/slug` (or `@owner/repo:slug`) -> external pull via Contents API.
+    let pkg = if spec.starts_with('@') {
+        let parsed = match knack_backend_github::parse_spec(&spec) {
+            Ok(p) => p,
+            Err(e) => {
+                let err = CliError::User {
+                    code: "INVALID_EXTERNAL_SPEC".into(),
+                    message: format!("{e}"),
+                    hint: Some(
+                        "valid forms: `@owner/slug`, `@owner/repo:slug`, `@owner/repo:slug@v0.1.0`"
+                            .into(),
+                    ),
+                };
+                emit_err(mode, &err);
+                return Err(err);
+            }
+        };
+        match knack_backend_github::pull_external(&parsed).await {
+            Ok(p) => p,
+            Err(e) => {
+                let err = CliError::NotFound(format!("external pull failed: {e}"));
+                emit_err(mode, &err);
+                return Err(err);
+            }
+        }
+    } else {
+        let (slug, version_filter) = crate::slug::parse_slug_at_version(&spec);
+        let backend = GithubBackend::new("".to_string(), "".to_string(), local_path.to_path_buf());
+        match backend.pull(slug, version_filter).await {
+            Ok(p) => p,
+            Err(e) => {
+                let err = CliError::NotFound(format!("github pull: {e}"));
+                emit_err(mode, &err);
+                return Err(err);
+            }
+        }
+    };
+
+    // Resolve the target directory the same way cloud-mode pull does: explicit
+    // --target wins, then --global, then nearest workspace's .knack/skills/.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let root = crate::workspace::resolve_skills_root(
+        &cwd,
+        args.global,
+        args.target.as_deref(),
+        home_skills_dir,
+    );
+    let dir = root.join(&pkg.slug);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        let err = CliError::Internal(format!("create target dir: {e}"));
+        emit_err(mode, &err);
+        return Err(err);
+    }
+
+    let mut written: Vec<String> = Vec::new();
+    for file in &pkg.files {
+        let dest = dir.join(&file.path);
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                let err = CliError::Internal(format!("mkdir {}: {e}", parent.display()));
+                emit_err(mode, &err);
+                return Err(err);
+            }
+        }
+        if let Err(e) = std::fs::write(&dest, &file.bytes) {
+            let err = CliError::Internal(format!("write {}: {e}", dest.display()));
+            emit_err(mode, &err);
+            return Err(err);
+        }
+        written.push(file.path.display().to_string());
+    }
+
+    emit_ok(
+        mode,
+        json!({
+            "slug": pkg.slug,
+            "version": pkg.version,
+            "target": dir.display().to_string(),
+            "files": written,
+            "backend": "github",
+        }),
+        || {
+            println!("✓ {} v{} → {}", pkg.slug, pkg.version, dir.display());
+            println!("  ({} files)", pkg.files.len());
+        },
+    );
+    Ok(())
 }

@@ -4,7 +4,8 @@ use clap::Args;
 use serde_json::json;
 
 use crate::api::{marketplace as api_market, ApiClient};
-use crate::errors::CliResult;
+use crate::config::BackendMode;
+use crate::errors::{CliError, CliResult};
 use crate::output::{emit_err, emit_ok, OutputMode};
 
 #[derive(Debug, Args)]
@@ -28,6 +29,10 @@ pub async fn run(args: SearchArgs, client: ApiClient, mode: OutputMode) -> CliRe
     } else {
         Some(args.query.join(" "))
     };
+
+    if let BackendMode::Github { local_path, .. } = &client.config.backend {
+        return github_search(q.as_deref(), local_path, mode).await;
+    }
     let page = match api_market::search(&client, q.as_deref(), &args.sort, args.limit).await {
         Ok(p) => p,
         Err(e) => {
@@ -86,4 +91,49 @@ fn truncate(s: &str, n: usize) -> String {
         out.push('…');
         out
     }
+}
+
+async fn github_search(
+    query: Option<&str>,
+    local_path: &std::path::Path,
+    mode: OutputMode,
+) -> CliResult<()> {
+    use knack_backend_github::GithubBackend;
+    use knack_types::Backend;
+
+    let q = query.unwrap_or("");
+    let backend = GithubBackend::new(String::new(), String::new(), local_path.to_path_buf());
+    let hits = backend.search(q).await.map_err(|e| {
+        let err = CliError::Internal(format!("github search: {e}"));
+        emit_err(mode, &err);
+        err
+    })?;
+
+    emit_ok(
+        mode,
+        json!({
+            "items": hits.iter().map(|s| json!({
+                "slug": s.slug,
+                "version": s.version,
+                "description": s.description,
+            })).collect::<Vec<_>>(),
+            "backend": "github",
+            "scope": "local-clone",
+            "note": "self-host search is limited to your local clone. cross-user discovery lives on the public marketplace at knack.ai.",
+        }),
+        || {
+            if hits.is_empty() {
+                println!("no matches in your local clone.");
+                println!(
+                    "(self-host search is local-only; for cross-user discovery, browse knack.ai)"
+                );
+                return;
+            }
+            for h in &hits {
+                let desc = h.description.as_deref().unwrap_or("");
+                println!("  {:<28} {:<10} {}", h.slug, h.version, desc);
+            }
+        },
+    );
+    Ok(())
 }

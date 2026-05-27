@@ -13,7 +13,7 @@
 //! Non-interactive flags `--self-host` and `--cloud` skip the prompt; CI and
 //! agents that already know the user's intent pass one of these.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
 use clap::Args;
@@ -123,6 +123,21 @@ pub fn run(args: InitArgs, mode: OutputMode) -> CliResult<()> {
             api_base: "https://api.getknack.ai".into(),
         })
     } else if !already_configured && !mode.quiet && !mode.json {
+        // Don't try to prompt if stdin isn't a TTY (agent shells, CI, pipes).
+        // The previous behavior was to block on read_line forever, which is
+        // what bit a real user in May 2026: their agent's PowerShell context
+        // had no TTY and `knack init` hung silently.
+        if !std::io::stdin().is_terminal() {
+            let err = CliError::User {
+                code: "NEEDS_FLAGS".into(),
+                message: "non-interactive shell; cannot prompt for backend choice".into(),
+                hint: Some(
+                    "pass --self-host (with --github-repo OWNER/NAME) or --cloud to pick a backend non-interactively".into(),
+                ),
+            };
+            emit_err(mode, &err);
+            return Err(err);
+        }
         let b = prompt_for_backend(&args, mode).map_err(|e| {
             emit_err(mode, &e);
             e
@@ -224,6 +239,18 @@ fn configure_self_host(args: &InitArgs, mode: OutputMode) -> CliResult<BackendMo
     let (owner, repo) = match args.github_repo.as_deref() {
         Some(spec) => parse_owner_repo(spec)?,
         None => {
+            // Same TTY guard as the top-level prompt: agents and CI don't
+            // have a terminal, so blocking on read_line is a silent hang.
+            // Force them to pass --github-repo explicitly.
+            if !std::io::stdin().is_terminal() {
+                return Err(CliError::User {
+                    code: "NEEDS_REPO_FLAG".into(),
+                    message: "non-interactive shell; cannot prompt for repo name".into(),
+                    hint: Some(
+                        "pass --github-repo OWNER/REPO (e.g. --github-repo jordan-gibbs/knack-skills)".into(),
+                    ),
+                });
+            }
             let name = prompt_for_repo_name()?;
             (gh_user.clone(), name)
         }
@@ -326,6 +353,13 @@ fn parse_owner_repo(spec: &str) -> CliResult<(String, String)> {
         });
     }
     Ok((owner.to_string(), repo.to_string()))
+}
+
+/// Like [`resolve_gh_user`] but returns `None` instead of erroring when gh
+/// isn't authenticated. Used by `auth status` in github mode to surface
+/// "(not signed in via gh)" without failing the whole command.
+pub fn resolve_gh_user_opt() -> Option<String> {
+    resolve_gh_user().ok()
 }
 
 /// Resolve the GitHub username via `gh api user --jq .login`. Falls back to

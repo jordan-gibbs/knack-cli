@@ -8,6 +8,7 @@ use clap::Args;
 use serde_json::json;
 
 use crate::api::{runs as api_runs, ApiClient};
+use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
 use crate::output::{emit_err, emit_ok, OutputMode};
 
@@ -38,7 +39,7 @@ pub struct MarkArgs {
 }
 
 pub async fn run(args: MarkArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> {
-    let status = match args.outcome.or(args.status_flag) {
+    let status = match args.outcome.clone().or(args.status_flag.clone()) {
         Some(s) => s,
         None => {
             let err = CliError::User {
@@ -51,7 +52,11 @@ pub async fn run(args: MarkArgs, client: ApiClient, mode: OutputMode) -> CliResu
         }
     };
 
-    let note = args.note.or(args.reason);
+    let note = args.note.clone().or(args.reason.clone());
+
+    if let BackendMode::Github { local_path, .. } = &client.config.backend {
+        return github_mark(&args.run_id, &status, note.as_deref(), local_path, mode);
+    }
     let result = api_runs::mark(
         &client,
         &args.run_id,
@@ -79,6 +84,44 @@ pub async fn run(args: MarkArgs, client: ApiClient, mode: OutputMode) -> CliResu
         Err(e) => {
             emit_err(mode, &e);
             Err(e)
+        }
+    }
+}
+
+fn github_mark(
+    run_id: &str,
+    status: &str,
+    note: Option<&str>,
+    local_path: &std::path::Path,
+    mode: OutputMode,
+) -> CliResult<()> {
+    match knack_backend_github::mark_run(local_path, run_id, status, note) {
+        Ok(snapshot) => {
+            emit_ok(
+                mode,
+                json!({
+                    "run_id": snapshot.run_id,
+                    "status": snapshot.status,
+                    "note": snapshot.note,
+                    "skill": snapshot.skill,
+                    "version": snapshot.version,
+                    "started_at": snapshot.started_at,
+                    "completed_at": snapshot.completed_at,
+                    "backend": "github",
+                }),
+                || {
+                    println!("✓ marked {} {}", snapshot.run_id, snapshot.status);
+                    if let Some(n) = &snapshot.note {
+                        println!("  note: {n}");
+                    }
+                },
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let err = CliError::NotFound(format!("mark run: {e}"));
+            emit_err(mode, &err);
+            Err(err)
         }
     }
 }
