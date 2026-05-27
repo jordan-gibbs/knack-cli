@@ -17,6 +17,7 @@ use clap::Args;
 use serde_json::json;
 
 use crate::api::{skills as api_skills, ApiClient};
+use crate::config::BackendMode;
 use crate::errors::{CliError, CliResult};
 use crate::output::{chatter, emit_err, emit_ok, OutputMode};
 use crate::skill_pack::pack_skill;
@@ -52,6 +53,15 @@ pub struct PublishArgs {
 }
 
 pub async fn run(args: PublishArgs, client: ApiClient, mode: OutputMode) -> CliResult<()> {
+    if let BackendMode::Github {
+        owner,
+        repo,
+        local_path,
+    } = &client.config.backend
+    {
+        return github_publish(&args, owner, repo, local_path, mode).await;
+    }
+
     let dir = match args.from.clone() {
         Some(p) => p,
         None => {
@@ -335,6 +345,135 @@ enum BumpKind {
 
 /// `1.0.0` → `1.0.1`. Mirrors the Python helper at
 /// `apps/api/knack_api/services/skills.py:bump_patch`.
+async fn github_publish(
+    args: &PublishArgs,
+    owner: &str,
+    repo: &str,
+    local_path: &Path,
+    mode: OutputMode,
+) -> CliResult<()> {
+    use knack_backend_github::GithubBackend;
+    use knack_types::{Backend, SkillManifest, SkillPackage};
+
+    let skill_dir = local_path.join("skills").join(&args.slug);
+    if !skill_dir.is_dir() {
+        let err = CliError::User {
+            code: "PUBLISH_NO_FOLDER".into(),
+            message: format!("no skill at {}", skill_dir.display()),
+            hint: Some(format!("run `knack create {}` first", args.slug)),
+        };
+        emit_err(mode, &err);
+        return Err(err);
+    }
+
+    // Resolve next version. Priority: --as-version, then --major/--minor/--patch
+    // bump from meta.knack.yaml's current version, then default to 0.1.0.
+    let version = resolve_github_version(args, &skill_dir)?;
+
+    if args.dry_run {
+        emit_ok(
+            mode,
+            json!({
+                "slug": &args.slug,
+                "version": &version,
+                "dry_run": true,
+                "owner": owner,
+                "repo": repo,
+            }),
+            || {
+                println!("✓ dry-run: would publish {}@v{}", args.slug, version);
+                println!(
+                    "  → github.com/{}/{} (tag {}/v{})",
+                    owner, repo, args.slug, version
+                );
+            },
+        );
+        return Ok(());
+    }
+
+    // Empty files signals "use what's on disk at skills/<slug>/" to the
+    // GithubBackend, so we don't have to round-trip through tarball + extract.
+    let package = SkillPackage {
+        slug: args.slug.clone(),
+        version: version.clone(),
+        manifest: SkillManifest {
+            slug: args.slug.clone(),
+            version: version.clone(),
+            description: None,
+            entry: PathBuf::from("SKILL.md"),
+            assets: Vec::new(),
+            created_at: chrono::Utc::now(),
+        },
+        files: Vec::new(),
+    };
+
+    let backend = GithubBackend::new(
+        owner.to_string(),
+        repo.to_string(),
+        local_path.to_path_buf(),
+    );
+    let receipt = backend.publish(package).await.map_err(|e| {
+        let err = CliError::User {
+            code: "GH_PUBLISH_FAILED".into(),
+            message: format!("github publish failed: {e}"),
+            hint: None,
+        };
+        emit_err(mode, &err);
+        err
+    })?;
+
+    emit_ok(
+        mode,
+        json!({
+            "slug": receipt.slug,
+            "version": receipt.version,
+            "url": receipt.url,
+            "backend": "github",
+        }),
+        || {
+            println!("✓ {}@v{}", receipt.slug, receipt.version);
+            println!("  → {}", receipt.url);
+        },
+    );
+    Ok(())
+}
+
+fn resolve_github_version(args: &PublishArgs, skill_dir: &Path) -> CliResult<String> {
+    if let Some(v) = &args.as_version {
+        return Ok(v.trim_start_matches('v').to_string());
+    }
+    // Read current version from meta.knack.yaml. Default 0.1.0 if missing.
+    let meta_path = skill_dir.join("meta.knack.yaml");
+    let current: String = if meta_path.exists() {
+        let bytes = std::fs::read(&meta_path).map_err(CliError::from)?;
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_slice(&bytes).map_err(|e| CliError::User {
+                code: "META_INVALID".into(),
+                message: format!("could not parse meta.knack.yaml: {e}"),
+                hint: None,
+            })?;
+        parsed
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0.0.0")
+            .to_string()
+    } else {
+        "0.0.0".to_string()
+    };
+
+    if args.major {
+        bump(&current, BumpKind::Major)
+    } else if args.minor {
+        bump(&current, BumpKind::Minor)
+    } else if args.patch {
+        bump_patch(&current)
+    } else if current == "0.0.0" {
+        Ok("0.1.0".to_string())
+    } else {
+        bump_patch(&current)
+    }
+}
+
 fn bump_patch(semver: &str) -> CliResult<String> {
     let s = semver.strip_prefix('v').unwrap_or(semver);
     let parts: Vec<&str> = s.split('.').collect();
