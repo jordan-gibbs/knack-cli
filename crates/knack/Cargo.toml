@@ -17,7 +17,7 @@ name = "knack_cli"
 path = "src/lib.rs"
 
 [dependencies]
-knack-types = { path = "../knack-types" }
+knack-types = { path = "../knack-types", version = "0.1" }
 knack-backend-github = { path = "../knack-backend-github" }
 async-trait.workspace = true
 include_dir.workspace = true
