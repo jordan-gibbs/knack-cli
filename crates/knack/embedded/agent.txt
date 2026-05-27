@@ -1,0 +1,1316 @@
+This is documentation for the Knack CLI, served from
+https://getknack.ai/agent.txt. Knack captures a user's workflow as a
+portable Anthropic Agent Skill — a SKILL.md plus assets — that runs in
+any compatible agent (Claude Code, Codex, Cursor, etc.). Source at
+https://github.com/jordan-gibbs/knack.
+
+This is a playbook, not a system prompt. Use your judgment. If something
+looks off, ask the user. If you're not in the right environment for
+a step, skip it and explain why. The opinionated parts are about how to
+conduct the interview (PART TWO) because interview quality determines
+skill quality — not about overriding your safety judgment.
+
+ABOUT THE INSTALL STEPS
+
+PART ONE installs the `knack` CLI binary. The installer scripts (served
+from getknack.ai, source at
+https://github.com/jordan-gibbs/knack/blob/main/apps/web/public/install
+and `install.ps1`) write to user-level paths only — `~/.local/bin/knack`
+on Unix or `%LOCALAPPDATA%\knack\bin\knack.exe` on Windows. No `sudo`,
+no system-wide changes. This is the same pattern rustup, nvm, bun, etc.
+use; treat it the same way you'd treat any other user-scoped CLI
+install.
+
+If you're running in a sandboxed environment where the install wouldn't
+persist or wouldn't reach the user's actual machine, the interview
+portion of this playbook (PART TWO onward) works WITHOUT the CLI — it
+produces a SKILL.md the user can take to any compatible agent. Skip
+the install in that case, tell the user what you're doing and why,
+and ask whether they want to (a) proceed with the interview and get a
+SKILL.md they install later themselves, or (b) handle the CLI install
+in a different environment.
+
+If the knack CLI is already installed, you can re-read this playbook
+at any time by running `knack info`. That command prints this same
+file. Useful if you've been compacted.
+
+
+=== ABOUT PERSISTENCE (read once) ===
+
+Knack registers itself with your runtime by writing a "knack" meta-skill
+into the runtime's native skill directory (~/.claude/skills/knack/SKILL.md,
+~/.agents/skills/knack/SKILL.md, ~/.cursor/rules/knack.mdc, ...). The
+frontmatter description is what triggers progressive disclosure when
+the user mentions Knack — your runtime loads the body lazily, no
+clutter in your general context file. Two important facts:
+
+  - PERSISTENCE depends on your filesystem persisting between sessions.
+    Local Claude Code, local Cursor, local Codex CLI on a non-sandboxed
+    user: the meta-skill survives, future chats know Knack automatically
+    when the user mentions it. No re-bootstrap needed.
+
+  - EPHEMERAL ENVIRONMENTS (Cowork's cloud VM, Codex CLI's
+    `CodexSandboxOffline` sandbox, Cloudflare Sandbox, any container
+    that resets between chats) DO NOT preserve the meta-skill file.
+    Each new chat is a clean filesystem. There is no Knack registry
+    that survives this — the user must paste
+      curl -fsSL https://getknack.ai/agent.txt
+    at the start of every new chat to re-bootstrap you on Knack. That's
+    expected, not a bug. Don't try to "remember" Knack from a previous
+    session; there is no carryover.
+
+  - Note on session startup: the runtime scans its skill directory
+    BEFORE your first turn. If `knack install` runs mid-session it
+    DOES write the meta-skill file, but THIS session won't see it —
+    only the next session would. So even in a non-ephemeral env,
+    `knack install` is a one-time setup, not a fix you apply per chat.
+
+  - Note on TextBlock targets (Aider, Continue.dev): these runtimes
+    have no native skill discovery, so for them `knack install` still
+    splices an install block into their free-form rules file. Same
+    persistence model as the meta-skill — survives on local FS, lost
+    in ephemeral envs.
+
+If you reach this playbook with no prior Knack context, that's fine —
+you have everything you need right now from these instructions. Do not
+ask the user to "set up Knack again" if Knack already worked for them
+in a different session.
+
+COWORK ONE-TIME SETUP (only if CLAUDE_CODE_IS_COWORK=1, only once per
+user, after the user has minted a PAT once): Cowork has a user-level
+"Instructions for Claude" surface that DOES persist across sessions,
+even though the VM filesystem doesn't. After you finish PART ONE
+step 2 (sign-in via the PAT-paste flow), tell the user — once, then
+drop it — that they can avoid the per-chat paste by adding a setting.
+
+CRITICAL: when you surface the block below to the user, you MUST
+substitute the literal value of $KNACK_AUTH_TOKEN everywhere you see
+`KNACK_AUTH_TOKEN_LITERAL` (typically two places). The user's input
+should be a single copy-paste of your output into the settings UI
+with zero find-and-replace. If your output still contains the
+placeholder string, you have failed at this task — re-render with
+the actual token inlined before sending.
+
+Say this verbatim (with the substitution above):
+
+  "Quick one-time setup so future Cowork chats are zero-friction:
+   open File → Settings → General → Instructions for Claude in
+   Cowork and paste exactly this (your token is already filled in):
+
+     I use Knack (https://getknack.ai) to author and run AI agent
+     skills. My personal access token is `KNACK_AUTH_TOKEN_LITERAL`.
+
+     At the start of every chat, before anything else:
+
+       1. Install knack if not present (Cowork's VM resets between
+          chats):
+            curl -fsSL https://getknack.ai/install | sh
+
+       2. Export my token for this shell:
+            export KNACK_AUTH_TOKEN='KNACK_AUTH_TOKEN_LITERAL'
+
+       3. Load the canonical playbook:
+            curl -fsSL https://getknack.ai/agent.txt
+          Follow it from there.
+
+   Treat that block like a password — only paste it into your
+   personal Cowork workspace. If you share Cowork with teammates,
+   they could read the token from your settings. If that's not a
+   fit, skip this and re-paste the PAT each new chat (slightly
+   more friction but no stored secret)."
+
+Do not surface this in non-Cowork runtimes (local Claude Code,
+Cursor, Codex CLI, etc. — their HOME install already persists, so
+this would just be a second source of truth that can drift). Do not
+surface it more than once per session. If the user already has the
+setting in place, they will tell you; don't pester.
+
+CODEX DESKTOP ONE-TIME SETUP (only when running inside the Codex
+desktop app, only once per user, after the user has minted a PAT
+once): the Codex desktop app has a "Custom Instructions" surface
+that persists across all chats. Signal: CODEX_HOME is set AND your
+runtime appears to be a GUI / desktop process (you can ask the user
+to confirm if unsure — "are you in the Codex desktop app rather
+than the terminal CLI?"). The CLI case is already covered by the
+pointer block knack writes to ~/.codex/AGENTS.md at install time;
+this section is specifically for the desktop GUI.
+
+CRITICAL (same as Cowork): substitute the literal value of
+$KNACK_AUTH_TOKEN everywhere you see `KNACK_AUTH_TOKEN_LITERAL`
+before showing the block to the user. Single copy-paste, no
+find-and-replace.
+
+Say this verbatim (with the substitution above):
+
+  "Quick one-time setup so future Codex chats are zero-friction:
+   open File → Settings → Personalization → Custom Instructions in
+   Codex and paste exactly this (your token is already filled in):
+
+     I use Knack (https://getknack.ai) to author and run AI agent
+     skills. My personal access token is `KNACK_AUTH_TOKEN_LITERAL`.
+
+     At the start of every chat, before anything else:
+
+       1. Make sure knack is on PATH (installed at user scope):
+            curl -fsSL https://getknack.ai/install | sh
+          (skip if `knack --version` already works)
+
+       2. Export my token for this shell:
+            export KNACK_AUTH_TOKEN='KNACK_AUTH_TOKEN_LITERAL'
+
+       3. Load the canonical playbook:
+            curl -fsSL https://getknack.ai/agent.txt
+          Follow it from there.
+
+   Treat that block like a password — only paste it into your
+   personal Codex workspace. If you share Codex with teammates, they
+   could read the token from your Custom Instructions. If that's not
+   a fit, skip this and re-paste the PAT each new chat."
+
+Do not surface this in non-Codex runtimes. Do not surface it more
+than once per session.
+
+You (the agent) are about to conduct a Knack interview for the user, in chat,
+using your own LLM. There is no remote conductor to call into. You ask the
+questions, the user answers, you write the resulting skill folder to disk,
+and you publish it via the knack CLI. The CLI is a thin skill-store client:
+it does auth, list, pull, publish, run, and that's it. Authoring is your job.
+
+
+=== PART ONE: SETUP (do this once if knack is not installed) ===
+
+1. INSTALL (skip cleanly if knack is already on disk)
+   First try: `knack --version`.
+   If that fails with command-not-found, do NOT install yet. The
+   installer adds knack to the user's persistent PATH but spawned
+   subshells inherit a stale PATH from when they were started, so a
+   previously installed binary may simply be invisible to this shell.
+   Check the canonical install dir first:
+     Windows:        %LOCALAPPDATA%\knack\bin\knack.exe
+     macOS / Linux:  ~/.local/bin/knack
+   If the binary exists there, just prepend that dir to this shell's
+   PATH and skip the install entirely:
+     Windows:        $env:Path = "$env:LOCALAPPDATA\knack\bin;$env:Path"
+     macOS / Linux:  export PATH="$HOME/.local/bin:$PATH"
+   Only run the installer if the binary truly does not exist:
+     Windows:        irm https://getknack.ai/install.ps1 | iex
+     macOS / Linux:  curl -fsSL https://getknack.ai/install | sh
+   Verify with: knack --version
+
+   1b. REGISTER (Codex-specific — skip for other agents)
+
+   If you are Codex (CODEX_HOME is set), the installer's
+   `knack install --auto` may fail to register the meta-skill because
+   Codex's workspace-write sandbox treats `~/.agents/` and `~/.codex/`
+   as read-only by default. Use Codex's built-in skill-installer
+   instead — it requests sandbox escalation for network fetches and
+   writes into `$CODEX_HOME/skills/` which Codex scans natively:
+
+     Tell the user: "I'm going to install the knack skill via your
+     built-in skill-installer so future Codex sessions pick up Knack
+     automatically. This needs network."
+
+     Invoke skill-installer:
+       scripts/install-skill-from-github.py --repo knack-skills/knack --path knack
+
+     If your runtime asks for sandbox escalation, allow it (network
+     fetch from github.com).
+
+     After install, tell the user: "Restart Codex to pick up the
+     knack skill. Future sessions will auto-load Knack on every chat."
+
+   For Claude Code, Cursor, Cline, Kiro, Windsurf, Trae, Gemini,
+   OpenCode, Factory, Amp: the installer's `knack install --auto`
+   handles registration without sandbox friction. No extra step
+   needed.
+
+2. SIGN IN
+
+   FIRST identify yourself by env var. Different runtimes need different
+   flows:
+
+     CLAUDE_CODE_IS_COWORK=1  → COWORK FLOW (cloud VM — paste a PAT)
+     CODEX_HOME=...           → NORMAL FLOW (sandbox can read real HOME)
+     CLAUDECODE=1             → NORMAL FLOW (local Claude Code)
+     CURSOR_TRACE_ID=...      → NORMAL FLOW (local Cursor)
+     (anything else)          → NORMAL FLOW or HEADLESS
+
+   --- NORMAL FLOW (local machine, persistent filesystem) ---
+
+   Run: knack auth login
+
+   A browser opens for OAuth 2.0 device-flow sign-in. On approval, the
+   CLI mints a long-lived Personal Access Token and saves it to:
+     macOS / Linux:  ~/.knack/auth.json
+     Windows:        %USERPROFILE%\.knack\auth.json
+
+   That file is readable from every future shell on this machine —
+   including sandboxed agents like Codex CLI, which mount the real
+   user's HOME read-only. ONE sign-in, persists everywhere, forever
+   (or until the user revokes from getknack.ai/app/settings#cli-tokens).
+
+   If the user is new the same flow creates an account. Confirm with:
+     knack auth status     (should print their email + plan)
+
+   The CLI polls in-process and returns automatically the moment the
+   user clicks Approve — you do NOT need to wait for them to message
+   you back.
+
+   --- COWORK FLOW (Anthropic Claude Cowork ONLY) ---
+
+   Cowork is a Linux cloud VM you're running in. It's NOT the user's
+   local machine. That shapes everything about how install + auth
+   work here:
+
+     • **Install targets YOUR VM, not the user's laptop.** When you
+       run `curl -fsSL https://getknack.ai/install | sh` in this
+       sandbox, knack lands in `~/.local/bin/knack` on the VM. Useful
+       for this chat. Gone when the chat ends. That's fine — knack
+       in the VM is what lets you run interview tools, write SKILL.md
+       to the user's repo (if they shared one), and publish to their
+       Knack account via the API. Don't worry about whether knack is
+       on the user's Windows machine; that's a separate concern
+       they handle on their own (with their own install).
+
+     • **You can't see the user's locally-stored PAT.** Different
+       machine, different filesystem. Don't ask them to "send their
+       token from ~/.knack/auth.json" — they can't, and it wouldn't
+       help anyway.
+
+     • **The browser device-flow won't complete inside a single Bash
+       call.** Cowork's tool-call timeout is shorter than the
+       device-code TTL (~5 min). The poll loop gets killed mid-wait.
+       Skip `knack auth login` here.
+
+     • **The VM resets between Cowork chats.** Anything you write to
+       disk is gone next session. The user's Knack ACCOUNT persists
+       (it's server-side); the local VM state doesn't.
+
+   So the install-and-auth dance for Cowork is:
+
+     1. Install knack in the VM:
+          curl -fsSL https://getknack.ai/install | sh
+        (User-scoped install to ~/.local/bin/knack. Same pattern as
+        rustup / nvm / bun. Source:
+        https://github.com/jordan-gibbs/knack/blob/main/apps/web/public/install)
+
+     2. Ask the user for a Personal Access Token:
+          "Open https://getknack.ai/app/settings#cli-tokens, click
+           'Generate token', copy the `knack_pat_…` string (shown
+           once), and paste it back to me."
+
+     3. Export it for this shell only — don't echo it back to your
+        transcript, don't write it to disk:
+          export KNACK_AUTH_TOKEN='knack_pat_<paste>'
+
+     4. Verify:
+          knack auth status
+        Expected: their email + plan + "via KNACK_AUTH_TOKEN env (PAT)".
+
+     5. Proceed to PART TWO. The PAT is good for this whole Cowork
+        chat. Next chat = fresh VM = re-do steps 1-3.
+
+   For zero-friction across all future Cowork chats, the user can
+   one-time set up Cowork's "Instructions for Claude" (File →
+   Settings → General) with the bootstrap block + their PAT embedded
+   — see the COWORK ONE-TIME SETUP block earlier in this playbook.
+   That's optional; the per-chat paste works fine if they don't want
+   to store the token in Cowork.
+
+   --- HEADLESS / CI ---
+
+   Same as Cowork flow: mint a PAT at getknack.ai/app/settings#cli-tokens,
+   export it as KNACK_AUTH_TOKEN in your shell. `KNACK_AUTH_TOKEN`
+   always beats the file store, so this is also the right escape hatch
+   if anything else goes wrong.
+
+   --- NO BROWSER (but persistent HOME) ---
+
+   Pass `--no-browser` to `knack auth login` to print the URL instead
+   of trying to open one. Useful in remote SSH sessions. The device
+   flow still polls in-process and saves a PAT on approval.
+
+
+=== PART TWO: CONDUCTING THE INTERVIEW ===
+
+You are NOT a chat-only conductor. You have file-reading tools (Read, Glob,
+Bash). USE THEM. The web version of this interview has to ask "what does
+your file look like?" because it can't see anything. You can. Open the
+files. Read them. Count rows. Look at column headers. Skim PDF structure.
+Ground every question in what you actually observed.
+
+You have four phases to walk through with the user, in order: Genesis,
+Artifacts (with file inspection), Intuition (with file-grounded invariants),
+Dry Run.
+
+Before you start, set up a workspace if there isn't one already:
+
+  knack init                            # creates ./.knack/ with skills/, drafts/
+
+`knack init` is idempotent — safe to run even if the workspace exists.
+This gives you a stable place to put authoring scratch and to consume
+pulled skills:
+
+  .knack/skills/<slug>/                 # written by `knack pull` (read-only)
+  .knack/drafts/<slug>/                 # written by you (read+write)
+
+For the rest of this playbook, "<slug>" is the slug you and the user
+agreed on in Genesis. Capture everything as you go in
+`.knack/drafts/<slug>/` (or somewhere the user nominates if they say so).
+You will write SKILL.md to that folder in PART THREE.
+
+Behavior across all phases:
+  - One question per turn. Never stack two questions.
+  - Use normal capitalization and punctuation. Be concise.
+  - No filler ("Great!", "Awesome!").
+  - No leading questions. "What did you do next?" not "Did you check the
+    spreadsheet next?"
+  - No jargon. Avoid "workflow", "pipeline", "process" when talking to the
+    user. Mirror their own words back to them.
+  - When you have observed something in a file, STATE it before asking
+    about it. "I see column 3 is in MM/DD/YYYY. Is it always that format?"
+    is worth ten generic "what if dates are weird" questions.
+  - Tone: a senior colleague who joined yesterday, genuinely curious, who
+    quietly opens the file rather than asking you to describe it.
+
+------------------------------------------------------------
+PHASE I: GENESIS (the question)
+------------------------------------------------------------
+
+Goal: get a concrete picture of what task the user wants to teach. By the
+end of this phase you should be able to fill in one sentence:
+
+  "This person wants to teach the AI X, which they do every Y, by doing Z
+   to A."
+
+What to dig for (only ask about what they haven't already volunteered):
+  - WHAT the task is (the action, not a job title)
+  - WHEN it comes up (frequency, trigger)
+  - WHO else does this kind of work
+  - WHAT it looks like end to end, walking through the most recent time
+
+Open with something like: "Hi! What do you want to teach me?" — keep it
+short and direct.
+
+Exit criteria: stop asking Genesis questions as soon as you can fill in
+the X/Y/Z/A sentence above, or when the user explicitly says "enough" or
+"next". Don't announce the phase change. Don't summarize back.
+
+------------------------------------------------------------
+PHASE II: ARTIFACTS (inspect their actual files)
+------------------------------------------------------------
+
+This is where you separate from a chat-only conductor. You will ASK for
+real files, then ACTUALLY OPEN them and look. Save a copy of every file
+the user shares into `.knack/drafts/<slug>/examples/` preserving their filename.
+
+Step 1 - INPUT.
+  Ask the user for the path to a real, recent input file (or a folder of
+  inputs). If they can't share a real file, accept a sample. Don't push.
+
+  Once you have the path, INSPECT it. Use your tools:
+    - For text / CSV / JSON / Markdown: Read the whole file (or head the
+      first ~200 lines if it's huge). Note encoding quirks (BOM, CRLF).
+    - For Excel / Word / PDF: Bash to identify (`file`, `pdfinfo`, or
+      `head` on the raw bytes). For PDFs note: page count, scanned vs
+      digital (try `pdftotext` or similar; empty extracted text = scanned
+      = OCR territory). For spreadsheets, sniff columns with Python /
+      pandas / openpyxl if available, or have the user paste a header row.
+    - For folders: Glob to enumerate. Sample two or three files. Note
+      naming patterns and counts.
+
+  Then make AT LEAST TWO concrete observations and ask follow-ups grounded
+  in what you saw. Examples (these are templates; rewrite to your actual
+  findings):
+    "I see this is a 14-page PDF, scanned (no extractable text — needs
+     OCR). Are these always scanned, or sometimes digital PDFs? And is
+     the page count usually around 14, or does it vary widely?"
+    "The spreadsheet has 47 rows and these columns: party_name, intake_date,
+     conflict_flag, notes. Dates are in `MM/DD/YYYY`. A few things:
+     are the columns always in this order with these exact names? Are
+     the dates always MM/DD/YYYY? And is 47 rows typical, or a small day?"
+    "The folder has 12 PDFs all named `intake-YYYYMMDD-<lastname>.pdf`.
+     Is that naming always consistent? Always last-name? Any other files
+     that sneak into this folder I should ignore?"
+
+  Capture the user's answers as rules immediately (write them into the
+  `## Intuition` section of SKILL.md as you go).
+
+Step 2 - OUTPUT.
+  Ask for the matching finished version, "as if a perfect you did it."
+  Same drill: read the file, observe structure, ask grounded questions.
+
+  Look for: section structure, formatting conventions, length, what fields
+  appear where, what was IN the input that's NOT in the output (data the
+  user filters or summarizes away), and what's in the output that ISN'T in
+  the input (data they pull from elsewhere or generate from knowledge).
+
+  That last pair is gold. "I notice the output has a 'Conflict Status'
+  field but the input doesn't. Where does that come from?" tells you
+  about external sources, conventions, judgment calls.
+
+Step 3 - DEFINITION OF DONE.
+  Free-form answer. What makes the output correct? What makes it good?
+  Push for two things if not volunteered: what makes it *correct* (would
+  be wrong otherwise) and what makes it *good* (the difference between
+  passable and what they'd actually ship).
+
+Step 4 - PROVENANCE / SOURCE QUESTIONS.
+  Before leaving this phase, ask the questions that tell you what assumptions
+  the skill can rely on AND what's outside your reach as an agent. Pick
+  whichever apply:
+    - "Will these PDFs always be OCR'd / always scanned / always digital?"
+    - "Are the columns always in this exact order with these exact names?"
+    - "Where does this file actually come from? Do you export it from
+       somewhere, or does it land in your inbox / a shared drive?"
+    - "If it comes from <Salesforce | internal portal | a paid database
+       | a vendor login>: I won't be able to log in there myself. The
+       skill will need the file dropped into a folder, or you'll have to
+       run the export step manually. Which is realistic?"
+    - "Are these always in English? Always in one timezone?"
+    - "Is the file always this size range? What's the largest you've seen?"
+    - "Are there ever blank rows / merged cells / hidden columns that
+       look like data but aren't?"
+  Capture answers as rules. If part of the task requires access you don't
+  have, write that as an explicit "Manual step:" in ## How to do it (e.g.
+  "User exports the latest case list from the firm's case-management portal
+  and drops it at <path>") rather than pretending it's automatic.
+
+Step 5 - ACCESS AND CREDENTIALS.
+  For every external data source the user named (Salesforce, Notion, an
+  internal portal, a paid API, anything that lives outside their local
+  filesystem), classify it as exactly one of:
+
+    LOCAL        File already on disk. Read directly. No setup needed.
+    API + creds  Service has an API and the user has (or can get)
+                 credentials. The skill can call it programmatically
+                 via a script in `.knack/drafts/<slug>/scripts/` that reads
+                 the credential from an environment variable at runtime.
+    MANUAL       No programmatic access, or the user doesn't want to
+                 set up an API. Capture as a "Manual step:" in
+                 ## How to do it.
+
+  For each API + creds source:
+    1. Ask: "Do you have API access to <service> today, or would you
+       need to set it up?"
+    2. If unsure, web-search the current auth flow ("<service> REST API
+       authentication 2026") and walk the user through generating a key.
+       Scope it narrowly: read-only if that's all the skill needs.
+    3. Write a small script in `.knack/drafts/<slug>/scripts/` that makes the
+       call. The script reads the credential from an environment variable
+       (e.g. `os.environ["STRIPE_API_KEY"]`). NEVER hardcode, NEVER inline
+       in SKILL.md.
+    4. Declare the requirement in `.knack/drafts/<slug>/meta.knack.yaml` under
+       `requires_secrets:` (schema in PART THREE).
+    5. Tell the user how to set the env var locally with whatever they
+       already use: 1Password CLI, `.env.local` + direnv, their shell rc,
+       a corporate vault. You are NOT building them a secrets store; you
+       are bridging to theirs.
+
+  Cross-machine sync: scripts you write in `.knack/drafts/<slug>/scripts/`
+  are packed into the published bundle and synced to anyone who
+  `knack pull`s the skill. A teammate gets the whole folder (SKILL.md,
+  scripts/, assets/, references/, examples/, meta.knack.yaml), then
+  provides their OWN value for each entry under `requires_secrets:`.
+  Values never sync; only the schema does.
+
+Exit criteria: you have one input file (read), one output file (read),
+a definition-of-done answer with at least 2-3 sentences of substance,
+provenance questions answered, and every external source classified
+(LOCAL / API+creds / MANUAL) with the right setup captured.
+
+------------------------------------------------------------
+PHASE III: INTUITION (file-grounded scenarios)
+------------------------------------------------------------
+
+Goal: extract the tacit rules that survive messy reality. Don't ask
+generic "what if" questions. Pull every scenario from something concrete
+you SAW in the input or output file.
+
+Each turn you do exactly one thing:
+  1. Surface ONE concrete observation from the file. Phrase it as a
+     specific situation the user would actually encounter.
+       Bad:  "What if the data is malformed?"
+       Good: "Row 23 has a blank in the `intake_date` column. How do you
+              handle a missing intake date?"
+       Bad:  "What if dates are weird?"
+       Good: "I see the date column has `04/03/26` for most rows but
+              `April 3, 2026` for the last two. Which format wins on a
+              real export?"
+  2. Wait for the answer.
+  3. Silently classify it as one of:
+       rule       (always do X)
+       exception  (X, except when Y)
+       priority   (when X and Y conflict, prefer X)
+  4. Write the rule into the `## Intuition` section of
+     `.knack/drafts/<slug>/SKILL.md` as you go, in the user's voice, as a
+     one-liner. Make it operational ("On date conflict, prefer ISO
+     format"), not a paraphrase of their literal words.
+  5. Ask the next scenario.
+
+Question categories - lift from what's actually in the file:
+  - Schema invariants ("Are the columns always in this exact order?")
+  - Format invariants ("Dates are MM/DD/YYYY here. Always that format?")
+  - Source invariants ("Always OCR'd PDFs? Always exported from QuickBooks?")
+  - Volume / range ("47 rows today. What's the range you typically see?")
+  - Empty / missing cells (cite the specific row you spotted)
+  - Outliers / weird values you saw with your own eyes
+  - Edge cases the user has hit before ("Tell me about a time this task
+     went weird")
+  - Forbidden behaviors ("What should an AI doing this never do?")
+  - Quality bars ("Lazy version vs the careful one?")
+  - Escalation ("When do you stop and ask a human?")
+
+Exit criteria:
+  - At least 8 rules captured, including at least one exception and one
+    explicit priority. If you have fewer, keep going.
+  - The user explicitly says "enough" or equivalent.
+  - The user has refused or given up on three consecutive scenarios.
+
+Do not stop early. Do not capture obvious or generic rules ("be accurate").
+If the answer is empty, don't capture anything that turn.
+
+------------------------------------------------------------
+PHASE IV: DRY RUN (try it on a fresh input)
+------------------------------------------------------------
+
+Before publishing, you run the skill yourself on a fresh input to catch
+gaps the interview missed. This is what separates an agent-driven flow
+from chat-only: you can actually execute.
+
+  1. Ask the user for ONE fresh input file, different from the example
+     they shared in Phase II. ("Drop another recent example. I want to
+     try producing the output before we publish.")
+
+  2. Apply the in-progress SKILL.md to that input. Read your own draft.
+     Walk the steps. Produce the output. Save it to
+     `.knack/drafts/<slug>/dry-run/output.<ext>`.
+
+  3. Show the user the output (or a tight summary if it's long: "Here's
+     what I produced. Top-level structure: <X>. Highlights: <Y>. Anything
+     off?").
+
+  4. Listen for the gaps. Common shapes of user feedback:
+       - "The date format is wrong" → patch SKILL.md / ## Intuition,
+         re-run on the same input.
+       - "You missed the conflict flag column entirely" → add a rule,
+         add a step in ## How to do it, re-run.
+       - "This is fine but I'd also include X" → ask whether X is always
+         needed or sometimes; capture as rule or exception accordingly.
+
+  5. Repeat the dry run until the user says "looks right" or "ship it"
+     or equivalent. Don't ship until they explicitly endorse the output.
+
+Exit criteria: the user has reviewed dry-run output and explicitly said
+it's good enough to publish v1. If they keep finding gaps, you keep
+revising SKILL.md and re-running. Each loop tightens the skill.
+
+
+=== PART THREE: AUTHORING ===
+
+Now you write the skill folder. One required file (`SKILL.md`) plus the
+examples folder you already populated. Other files are optional.
+
+`.knack/drafts/<slug>/SKILL.md` (required) - follows the Anthropic Agent Skills
+open standard. This is the ONE file every Agent-Skills-aware tool (Claude
+Code, OpenAI Codex CLI, Gemini CLI, GitHub Copilot, Cursor) loads. Its
+frontmatter is the only thing those tools see at session start, so the
+description has to do real selection work.
+
+    ---
+    name: <slug, lowercase, hyphens only, matches the slug you'll publish>
+    description: Use this skill when the user <concrete trigger>. <Optional
+      second clause naming file types, request patterns, or domain words.>
+    ---
+
+    # <Sentence-case title>
+
+    <2-4 paragraphs: what, inputs, outputs, the shape of work. Use the
+     user's own words where possible.>
+
+    ## Inputs
+
+    <Concrete: column names from their input artifact, format expectations.>
+
+    ## Output
+
+    <Concrete: template structure if applicable, the shape of a correct
+     finished version.>
+
+    ## How to do it
+
+    <Step-by-step. Each step one paragraph. Reference rules from the
+     ## Intuition section below where they apply.>
+
+    ## Intuition
+
+    <The rules you captured during Phase III, grouped by kind. Omit any
+     subsection that has no entries; don't pad with generic rules.>
+
+    ### Always
+    - <rule 1>
+    - <rule 2>
+
+    ### Except
+    - <exception 1: when X, then Y>
+
+    ### When in conflict
+    - <priority 1: prefer X over Y because Z>
+
+    ### When to ask a human
+    - <escalation rule>
+
+    ## Definition of done
+
+    <Bulleted list. Correctness criteria first, then quality criteria.
+     Pulled from the user's answer in Phase II.>
+
+Description format (this is the highest-leverage line in the whole file):
+
+  - Lead with "Use this skill when..." so agents like Claude Code can
+    match it to the user's request at session start.
+  - Name concrete trigger conditions: file types, vocabulary the user
+    uses, request shapes ("...asks to extract parties and dates from a
+    legal intake PDF").
+  - Avoid generic verbs alone ("processes data"); prefer specifics
+    ("extracts parties, dates, and conflict flags from intake PDFs").
+  - 200 chars max. The whole frontmatter description is what stands
+    between your skill being selected and being ignored.
+
+`.knack/drafts/<slug>/meta.knack.yaml` (optional but RECOMMENDED if the skill
+needs any external setup) - this is where you declare what the skill
+expects at runtime so it's self-onboarding when someone else pulls it.
+
+The three required fields are `name`, `slug`, `author`. Do NOT write an
+`id` field by hand. The skill id is server-managed and pinned by the URL
+path on publish, so the file does not need it. If you used
+`knack create --scaffold .knack/drafts/<slug>` (which you should), the id is
+already pre-filled in the file for portability — leave it alone.
+
+    name: <Display Name>
+    slug: <same slug as SKILL.md frontmatter>
+    author: <user's email>
+
+    # Environment variables the skill needs to run. Each entry is shown
+    # to the user when they pull the skill; the agent walking them
+    # through setup uses `description` and `setup_url` to onboard them.
+    # The values themselves NEVER live in Knack. Users store them in
+    # whatever they already use (1Password CLI, .env.local, direnv,
+    # corporate vault). knack run reads the env vars from the user's
+    # shell at runtime.
+    requires_secrets:
+      - name: STRIPE_API_KEY
+        description: Stripe restricted key with read:invoices scope
+        setup_url: https://dashboard.stripe.com/apikeys
+      - name: NOTION_TOKEN
+        description: Notion internal-integration token (read access)
+        setup_url: https://www.notion.so/my-integrations
+
+    # System binaries / runtimes the scripts in this skill need on PATH.
+    # Helps a teammate know they need to install pdftotext before
+    # running the skill.
+    requires_tools:
+      - python>=3.10
+      - pdftotext
+
+Omit either list if the skill doesn't need it. Don't pad either list
+with things the skill doesn't actually use.
+
+`.knack/drafts/<slug>/scripts/` (optional) - executable helpers the skill calls
+during its run. One file per script, named after what it does
+(`fetch_invoices.py`, `format_report.py`). Reference them by relative
+path in SKILL.md's ## How to do it section ("Run `python
+scripts/fetch_invoices.py` to pull this period's invoices"). Scripts read
+credentials from env vars declared in `requires_secrets`.
+
+`.knack/drafts/<slug>/assets/` (optional, Anthropic Skills convention) -
+templates, header blocks, fixtures the skill consults at runtime.
+
+`.knack/drafts/<slug>/references/` (optional, Anthropic Skills convention) -
+long-form docs the agent should consult on demand (a policy PDF, a style
+guide). The progressive-disclosure model means agents load these only
+when needed, not at session start.
+
+`.knack/drafts/<slug>/examples/` - the input/output pair(s) you collected in
+Phase II. The first pair is the golden example.
+
+PACKAGING: `knack publish` packs the WHOLE skill folder into a deterministic
+gzip tarball and uploads it. `knack pull` unpacks it on the other end. So
+SKILL.md, meta.knack.yaml, scripts/, assets/, references/, examples/,
+tests/ all sync across machines and teammates as one immutable version.
+(A standalone `intuition.md` is also recognized for back-compat with
+legacy skills authored before rules moved inside SKILL.md, but new skills
+should put the ## Intuition section directly inside SKILL.md.) Files
+OUTSIDE those canonical paths (e.g. a stray `.env` at the folder root, a
+node_modules/) are NOT bundled, which is by design — keeps junk out and
+secrets out. NEVER hardcode credentials in any file inside scripts/ or
+anywhere else in the folder: scripts read them from env vars declared in
+`requires_secrets`.
+
+Bundle size cap is 100 MB uncompressed. If you're packing huge fixtures
+into examples/ or references/, trim or store them out of band.
+
+
+=== PART FOUR: PUBLISHING ===
+
+Pick a slug for the skill (lowercase, hyphens only, matches the `name`
+field in SKILL.md frontmatter). Then:
+
+  knack create <slug> --name "Display Name" --description "One-line summary" \
+      --scaffold .knack/drafts/<slug>
+
+ALWAYS pass `--scaffold`. It writes a complete starter folder (SKILL.md
+with frontmatter, meta.knack.yaml with name/slug/author/id auto-filled,
+intuition.md stub, examples/). Authoring meta.knack.yaml by hand is the
+wrong move — you end up pasting UUIDs the server already knows. Then:
+
+  knack validate .knack/drafts/<slug>            # local pre-flight, no network
+  knack publish <slug> --from .knack/drafts/<slug> --dry-run    # see manifest
+  knack publish <slug> --from .knack/drafts/<slug>              # ship it
+
+`knack validate` runs the same shape checks the server enforces, so
+missing required meta.knack.yaml fields get caught before you pay a
+round-trip. `--dry-run` packs the tarball locally and prints the file
+manifest without uploading. Confirm with `knack list`. Show the user
+the row for their new skill.
+
+If you skip `--scaffold`, you're on the hook to assemble the folder
+yourself. The three required `meta.knack.yaml` fields are `name`,
+`slug`, `author` — without all three, publish 422s with
+SKILL_FORMAT_INVALID. The `id` field is server-managed and optional in
+the file; don't invent one. Just use `--scaffold`.
+
+PUBLISH ERROR CHEAT SHEET (what each code means and how to recover):
+
+  SKILL_FORMAT_INVALID (422)
+    A required field in SKILL.md frontmatter or meta.knack.yaml is
+    missing/malformed. Details list `issues[]` with json-pointer paths
+    (`/name`, `/file_patterns/inputs/0`, etc.). Read the path, fix the
+    field, retry. Don't loop blindly — the details tell you exactly
+    where the gap is.
+
+  META_MISMATCH (409)
+    Either meta.knack.yaml's `id` does not match the URL skill you're
+    publishing to, OR meta.knack.yaml's `slug` does not match the
+    skill's slug. Causes:
+      - You pulled skill A's folder and tried to publish it back as
+        skill B (forking by retargeting). DON'T. Run `knack create
+        <new-slug> --scaffold <new-dir>` and copy your edits across.
+      - An agent (you?) wrote an `id` into meta.knack.yaml. Don't.
+        Delete the `id:` line and republish; the server will accept
+        the file without it.
+      - You edited the `slug` in meta.knack.yaml. Slugs are immutable
+        after create — restore the original slug or scaffold a fresh
+        skill with the new one.
+
+  IMMUTABLE_VERSION (409)
+    You tried to publish a semver that already exists. Bump via
+    `--patch` / `--minor` / `--major` and republish. Versions are
+    append-only by design.
+
+  BUNDLE_NOT_FOUND / BUNDLE_INVALID (422)
+    The tarball didn't reach R2, was corrupt, or expanded past the
+    100 MB cap. Re-run publish; if it persists, trim
+    examples/references/ contents.
+
+  PLAN_LIMIT_EXCEEDED (422)
+    The user hit a free-plan cap (max_skills, team-scope without paid
+    plan, video understanding, etc.). Don't keep retrying — tell the
+    user what they bumped into and that upgrading on /pricing fixes it.
+
+  CONFLICT (409, generic)
+    Most commonly: duplicate slug on `knack create`. Different users
+    can reuse a slug; one user can't repeat one. Pick a new slug.
+
+
+=== PART FIVE: ITERATING ===
+
+When the user wants to change a skill they already published:
+
+  knack pull <slug>                   # writes the latest into .knack/skills/<slug>/
+  # edit, add, or delete any file in the folder with your normal tools
+  knack publish <slug>                # auto-bumps patch (e.g. 1.0.0 to 1.0.1)
+
+The publish step packs whatever's currently in the local folder. To
+modify a skill:
+  - EDIT a file: open and rewrite it, then publish.
+  - ADD a file: write it into the appropriate subdir (scripts/, assets/,
+    references/, examples/, tests/), then publish. It'll be in the
+    bundle the next teammate pulls.
+  - REMOVE a file: delete it from the local folder, then publish. The
+    new version's bundle won't contain it. Old versions still do
+    (immutability) — `knack pull <slug>@<old-semver>` still gets it.
+
+Or pass a specific bump:
+  knack publish <slug> --minor        # 1.0.x to 1.1.0
+  knack publish <slug> --major        # 1.x.x to 2.0.0
+
+Use --patch for fixes, --minor for new behavior, --major for breaking
+changes. If they say "the date format is wrong, fix it" that's a --patch.
+If they say "also extract the matter number" that's a --minor. If they
+say "this needs a totally different input format now" that's a --major.
+
+ROLLING BACK to a previous version when a recent publish broke
+something. Two paths, pick the one that fits:
+
+1. POINT-BACK (fastest, no edits, no new version). The skill detail
+   page in the workspace (https://getknack.ai/app/skills/<id>/versions)
+   has a "Make current" button on every prior version. One click moves
+   the `current_version_id` pointer back to that semver. Versions are
+   immutable, so nothing is destroyed — runs just resolve to the older
+   SKILL.md again. Forward-rolling uses the same button.
+
+2. PULL + REPUBLISH (when you also want to edit before re-shipping):
+
+     knack pull <slug>@<old-semver>      # e.g. <slug>@1.0.3
+     # the folder now has the old contents — tweak if you want
+     knack publish <slug>                # ships as the next patch
+
+Versions are append-only — `<slug>@1.0.3` never disappears either way.
+Don't try to "delete" or "revert" a published version; there's no API
+for that by design (audit trail, telemetry consistency).
+
+
+=== PART SIX (OPTIONAL): RUNNING THE SKILL ===
+
+When the user wants to use the skill on real work, YOU (the agent
+reading this playbook) execute the skill yourself, inline, with your
+own tools. `knack run` is a telemetry hook — it registers a Run row on
+the server and returns a `run-id`. It does NOT invoke another agent.
+It does NOT shell out. It does NOT execute the skill for you. Reading
+SKILL.md and doing the work is your job.
+
+The flow is four steps:
+
+  1. PULL (or verify already pulled).
+       knack pull <slug>
+     This drops the skill folder at `.knack/skills/<slug>/`
+     containing SKILL.md, meta.knack.yaml, scripts/, assets/,
+     references/, examples/, tests/.
+
+  2. PRECHECK CREDENTIALS.
+     Read `.knack/skills/<slug>/meta.knack.yaml`. For every entry
+     under `requires_secrets:`, verify the env var is set in the
+     user's current shell. If any is missing, STOP. Tell the user
+     exactly what's missing, the description, and the setup_url, then
+     ask them how they'd like to provide it:
+         - "Already in 1Password? Run `op read 'op://...' | export ...`"
+         - "Add to your .env.local and `direnv allow`?"
+         - "Stick it in your shell profile?"
+     Whatever they prefer. Once set in this shell, continue.
+
+  3. REGISTER THE RUN.
+       knack run <slug> --input <path-to-input-file>
+     This prints `run-id: <uuid>` and exits. The Run is now recorded
+     on the server with status=running. NO CODE EXECUTES. NO AGENT IS
+     INVOKED. The CLI's job here is purely "open a telemetry record."
+
+     To pin to a specific historical version (regression check against
+     a last-known-good build):
+       knack run <slug>@<semver> --input <path>
+
+     `--runtime <tag>` can be passed to identify which agent is doing
+     the run (e.g. `--runtime claude-code`, `--runtime cursor`); it's
+     pure metadata for stats — defaults to "agent" if omitted.
+
+  4. DO THE WORK YOURSELF.
+     Read `.knack/skills/<slug>/SKILL.md`. Follow its `## How to do
+     it` section, applying every rule in `## Intuition`. Use your
+     normal tools (Read / Write / Edit / Bash). Run any
+     `scripts/*` the skill ships if SKILL.md tells you to. If the
+     skill declares `requires_secrets:` and a secret is missing, stop
+     and surface the gap (see step 2).
+
+  5. CLOSE THE LOOP.
+       knack mark <run-id> succeeded
+       knack mark <run-id> failed --note "<what went wrong>"
+     Marking is what closes the telemetry loop so the user (and the
+     skill author) can see what's working over time. Status is a
+     positional arg now — examples above work as written.
+
+
+=== PART SEVEN (OPTIONAL): SHARING + DISCOVERY ===
+
+EDITING METADATA (slug stays immutable):
+
+  knack edit <slug> --name "New Display Name"
+  knack edit <slug> --description "Updated one-liner"
+  knack edit <slug> --scope public      # flip personal → public
+  knack edit <slug> --scope personal    # flip public → personal (unpublish)
+
+Public skills require the user to have claimed a username first:
+
+  knack username <name>      # one-time, permanent
+
+(Slug changes are intentionally not supported. Treat slugs as forever.)
+
+DELETING is web-only by design — agents cannot delete skills. If the
+user asks to delete one, point them at the workspace Settings tab.
+
+DISCOVERY: search the public marketplace:
+
+  knack search <terms>                    # full-text search, default sort=trending
+  knack search <terms> --sort top         # highest-rated
+  knack search <terms> --sort recent      # newest
+
+Pull a public skill by handle:
+
+  knack pull @<author>/<slug>
+
+RATING public skills (1-5 stars, optional review):
+
+  knack rate <slug> 5 --review "exactly what I needed"
+  knack rate <slug> --clear              # remove your rating
+
+FORKING (clone a public skill into the user's library)
+
+When you want to USE someone else's public skill as a starting point
+for your own work — modify it, republish your version, run it —
+that's a FORK. When you just want to run the published skill as-is,
+that's `knack pull` (or `knack run @<author>/<slug>` directly). Don't
+fork if the user only wants to consume the original — forks consume
+their `max_skills` quota.
+
+Forks live in the user's personal scope. The server creates a new
+Skill row owned by the caller, copies the latest published version's
+bundle byte-for-byte (R2 bytes reused, no re-upload), records the
+lineage in `forked_from_skill_id` (surfaced on the marketplace card
+as "Forked from @<author>/<slug>"), bumps the original's
+`forks_count` by one, and unpacks the bundle into the workspace's
+`drafts/<slug>/` so the user can immediately edit and republish.
+
+  knack fork @<author>/<slug>                        # default slug + name
+  knack fork @<author>/<slug> --slug my-version      # rename the fork
+  knack fork @<author>/<slug> --name "My Version"    # custom display name
+  knack fork @<author>/<slug> --slug X --name "Y"    # both at once
+  knack fork @<author>/<slug> --target ./out         # custom output dir
+  knack fork @<author>/<slug> --global               # use ~/.knack/drafts/
+
+After a fork the user can:
+  - `knack publish <slug>` to ship a new personal version
+  - `knack edit <slug> --scope public` to publish it publicly (requires
+    a claimed username — `knack username <handle>`)
+  - `knack run <slug>` and `knack mark` runs against it
+  - Slug uniqueness is per-owner, so your fork's slug doesn't collide
+    with the original author's
+
+The fork target must be a public skill addressed by `@<author>/<slug>`.
+Forking a bare slug or a personal/team skill is rejected. If the
+source has no published version (412 NO_VERSION), pick a different
+source or wait for the author to publish.
+
+There is no PR / "suggest a fix" workflow in v1. The pattern is
+fork → edit → share your fork's URL with the original author.
+
+TEAMS:
+
+  knack team create <slug> --name "Acme Refunds"
+  knack team list
+  knack team invite <team-id> user@example.com --role collaborator
+  knack team accept <invite-token>
+  knack team role <team-id> <user-id> owner|collaborator|viewer
+
+FOLDERS
+
+Folders organize PERSONAL and TEAM skills only. Public/marketplace skills
+are never foldered — they live in the `@user/slug` marketplace namespace
+and are bucketed by `category` instead. Flipping a skill from
+personal/team to public silently clears its folder.
+
+Folders are OPTIONAL. A skill with no folder is "unfiled"; that's the
+default, and it stays valid forever. Don't push the user to file every
+skill — folders earn their keep around 10+ skills. If the user has 3
+skills, skip folders entirely.
+
+Folders are ALTERABLE AT ANY TIME. Create, rename, delete, move skills
+in/out — every operation is reversible (versions stay immutable; only
+folder assignment changes). The same operations work from the web
+workspace (Skill → Settings → Folder dropdown, plus the Folders list in
+the sidebar) and from the CLI. Pick whichever surface fits the moment.
+
+Personal folders belong to the requesting user. Team folders belong to
+the team — every team member can read them; only collaborator+ can
+create/rename/move; only owner can delete.
+
+CLI surface:
+
+  knack folder create "Finance"             # personal folder
+  knack folder create "Ops" --team-id <id>  # team folder, requires write on the team
+  knack folder list                          # all folders you can see
+  knack folder list --scope team             # only team folders
+  knack folder mv monthly-close Finance      # move a skill in
+  knack folder mv monthly-close --unfiled    # take a skill out
+  knack folder rename Finance "Accounting"   # rename by id-or-name
+  knack folder delete "Accounting"           # contained skills become unfiled
+
+  knack list --folder Finance                # filter skills list to one folder
+  knack list --unfiled                        # skills with no folder (root-level)
+
+NESTED folders are supported — a folder can sit under another folder
+(same owner). One folder, one parent; arbitrary depth; no cycles
+(server-rejected). Use sparingly: deeply nested trees confuse users.
+Two levels is plenty for most libraries.
+
+  knack folder create "Q1" --parent Finance        # nest by name
+  knack folder create "Q1" --parent <folder-id>    # or by id
+  knack folder reparent "Q1" Finance               # move under a different parent
+  knack folder reparent "Q1" --root                # promote back to root
+
+`knack folder list` returns every folder the user can see, with
+`parent_folder_id` populated so a client can build the tree. The web
+sidebar renders this as a collapsible tree under "Your knacks".
+
+The folder name in `knack folder mv` is resolved server-side; if it
+doesn't exist yet the CLI creates it on the fly (same semantics as
+`knack folder create` + `mv`). To force creation up front (e.g. you
+want to confirm scope/team), call `knack folder create` first.
+
+Cross-scope is rejected: a personal folder can hold only that user's
+personal skills, and a team folder can hold only that team's skills. If
+the user moves a skill between scopes (personal ↔ team), the server
+clears the folder assignment because the prior folder belongs to the
+wrong owner.
+
+Workspace cache: `.knack/folders.json` mirrors the cloud assignment so
+`knack list --folder=X` works offline-ish. The cloud is the source of
+truth; `knack pull` reconciles the file on every fetch.
+
+VERSIONS + DIFF
+
+Skills are immutable per-version. Every `knack publish` bumps the
+semver and writes a fresh `SkillVersion` row pinning that exact
+state. The `current_version_id` on the Skill points at whatever is
+"now"; older versions stay around forever for replay and audit.
+
+  knack publish <slug> --as-version 0.2.0     # bump from 0.1.0
+  knack pull <slug>@0.1.0                      # pull a historical version
+  knack run <slug>@0.1.0                       # pin a Run to a specific version
+  knack diff <slug>@0.1.0 <slug>@0.2.0         # unified diff of SKILL.md,
+                                                # intuition.md, meta.knack.yaml
+
+`knack diff` only compares two versions of the same slug; different
+slugs are rejected. Output is ANSI line-diff in human mode, structured
+per-file unified-diff strings in `--json`.
+
+FEEDBACK (BUG REPORTS AND MAINTAINER REPLIES)
+
+When `knack` itself misbehaves — broken command, wrong response,
+docs that lie — open a feedback thread. It's a two-sided
+conversation between the user's account (you, plus the human in the
+web UI) and Knack staff. Anything you post is visible to the human in
+their workspace; anything they reply is visible to you.
+
+TRIAGE — WHICH TOOL FOR WHICH PROBLEM:
+
+  - `knack` itself misbehaved (broken command, 500, wrong response,
+    confusing error text, docs that lie) → FEEDBACK.
+  - A skill's output was wrong on a specific run → `knack mark <run-id>
+    failed --note "..."`. That closes the run-side loop. Use feedback
+    on top of mark only if the skill IS broken (vs the user's input
+    being weird).
+  - Auth, network blip, plan-limit 403, malformed user input → SURFACE
+    TO THE USER. Don't file.
+  - One-off 5xx that resolved on retry → don't file.
+  - Same 5xx three times across different sessions → file.
+
+BEFORE OPENING, CHECK FOR DUPLICATES:
+
+  knack feedback list --status open
+
+If a similar thread is already open, REPLY into it instead of opening
+a new one. Duplicates burn rate-limit slots and fragment the
+conversation.
+
+THE AGENT FLOW:
+
+  knack feedback open --subject "..." --body "..." \
+      [--run RUN_ID] [--skill SKILL_ID] [--cli-meta]
+  knack feedback list                  # check for staff replies later
+  knack feedback show <thread-id>      # advances the read pointer
+  knack feedback reply <thread-id> --body "..."
+
+SUBJECT (160 char cap, aim for 6-12 words):
+
+  Pattern: <verb> <noun> – <short context>
+    Good:   "feedback open returns 500 when --skill is set"
+    Good:   "knack pull strips meta.knack.yaml on macos arm64"
+    Good:   "claude-api skill's intuition.md crashes the compiler"
+    Bad:    "error"
+    Bad:    "knack didn't work"
+    Bad:    "help"
+
+BODY (8 KB cap). Four bullets, each one matters:
+
+  1. WHAT YOU WERE TRYING TO DO  (one sentence)
+  2. WHAT HAPPENED               (the actual error / wrong output, verbatim)
+  3. WHAT YOU EXPECTED           (one sentence; helps staff triage intent)
+  4. EXACT COMMAND + RAW OUTPUT  (literal; `--json` output if you have it)
+
+  Long traces go via stdin, not inline:
+    cat /tmp/trace.log | knack feedback open --subject "..." --body -
+  Don't paste 200 lines of grep output into `--body "..."`; you'll hit
+  the 8 KB cap.
+
+ATTACHMENT HEURISTIC:
+
+  --run <id>      The bug happened during a Run you registered with
+                  `knack run`. Staff can then pull the run's
+                  inputs_summary / outputs_summary / files_touched /
+                  marks[] without back-and-forth.
+  --skill <id>    The bug is ABOUT a skill itself (bad README, broken
+                  bundle, wrong output across all runs). Different
+                  from `mark failed`: feedback flags the skill as
+                  broken; mark records the agent's verdict on one run.
+  --cli-meta      Always safe; auto-fills cli_version + os + arch.
+                  Use this when the bug is in `knack` itself rather
+                  than tied to a Run or Skill.
+
+  Any combination works, or none. When in doubt, --cli-meta alone is fine.
+
+REPLIES (no rate limit):
+
+  knack feedback reply <thread-id> --body "..."
+
+Reply when staff asks a follow-up question, or when you find a
+workaround or fix yourself — post it on the same thread, don't open
+a new one.
+
+WHEN STAFF REPLY:
+
+The next `knack` command (ANY command) prints a one-line banner to
+stderr:
+
+    knack: you have unread replies from staff. run `knack feedback list` to see them.
+
+The banner keeps appearing on subsequent calls until you run
+`knack feedback show <id>`. Reading the thread advances the server
+read pointer; the banner stops being attached. Closed threads stop
+nagging on their own.
+
+DON'T FILE:
+
+  - Transient network errors that resolved on retry
+  - The user's own malformed input ("did you mean...?")
+  - Plan-limit 403s ("upgrade your plan")
+  - Auth failures (`knack auth login` is the fix, not a bug)
+  - One-off 5xx that resolved on retry
+  - Anything you can fix by re-reading the docs
+
+RATE LIMIT: 30 new threads per hour per user; replies are uncapped.
+Tripping the limit returns
+`{"error":{"code":"feedback.rate_limit"}}` (HTTP 429). Treat the
+limit as a SMELL — if you're hitting it, you're filing too many
+duplicates or filing things that should be a `mark` or a user-facing
+note. Closed-thread reply returns `feedback.closed` (HTTP 409) — open
+a new thread.
+
+`from_side` is server-derived. Trying to post a message with
+`"from_side": "admin"` in the body is silently stored as `"user"` —
+you can't impersonate staff.
+
+
+=== RULES ===
+
+  - Files stay on this machine. Do not upload anything the user has not
+    explicitly agreed to. Examples folder stays local unless the user asks
+    to attach files at publish time.
+  - Quote the user word for word in their answers. Their tacit knowledge
+    is the whole point. Do not tidy it.
+  - One question per turn, always.
+  - Do not invent commands or flags. If unsure, run `knack docs` or
+    `knack introspect` and read the actual surface.
+  - Phase exit criteria are not optional. Do not stop Intuition early.
+  - If anything fails, include `knack debug` output in any bug report
+    you file. (`knack debug` is a static config / auth-state dump — it
+    doesn't capture the last error, so don't expect it to explain the
+    failure on its own. The actual failure is in the error envelope
+    the failing command printed.)
+
+  - BE HONEST ABOUT WHAT YOU CAN AND CANNOT DO. The user is trusting you
+    to capture their workflow accurately, which means being upfront about
+    your limits. You cannot:
+      * Log into anything on their behalf (Salesforce, internal portals,
+        bank dashboards, paid databases, email accounts, anything behind
+        SSO or 2FA).
+      * Access services that need API keys you haven't been given.
+      * See their screen or their other apps.
+      * Make purchases, send messages, or take actions in external systems
+        without the user explicitly setting that up (and even then, only
+        with named credentials).
+      * Run code in environments you don't have access to (their corporate
+        VPN, their phone, their colleague's machine).
+    When any of these come up in the workflow, SAY SO PLAINLY and capture
+    the gap in SKILL.md. Don't pretend a manual step is automatic. Write
+    it as: "Manual step: <user does X>, drops the result at <path>. The
+    skill picks up from there." A skill that's honest about its boundaries
+    is usable; one that papers over them fails on the first real run.
+
+
+=== UPDATING ===
+
+When a `knack` command runs, the next stderr line you see may look
+like:
+
+    knack 0.7.3 available (you have 0.5.0). Run `knack upgrade` to update.
+
+This is a passive notice. The command that printed it already ran;
+its real output is everywhere except that one line. Do NOT retry the
+command or treat the banner as an error.
+
+When you see the banner, tell the user a newer knack is out and
+suggest running `knack upgrade` at a good moment. The command runs
+the platform install script in place (POSIX: `curl ... | sh`;
+Windows prints the `iwr ... | iex` line for a fresh PowerShell because
+the running exe is file-locked).
+
+Suppressors, in case the banner is unwanted:
+
+  * `--json` and `--quiet` already disable it.
+  * `KNACK_NO_UPDATE_CHECK=1` disables it for one shell (use this in
+    CI where you don't want pipeline noise).
+
+The check itself is non-blocking. A background task refreshes the
+cached "latest version" no more than once every 24 hours with a 3s
+timeout, and never blocks the command you actually ran.
+
+
+=== UNINSTALL ===
+
+If the user wants to remove knack, the canonical path is:
+
+    knack uninstall                 # interactive: prompts before clearing
+    knack uninstall --yes           # non-interactive (agent-friendly)
+    knack uninstall --yes --json    # machine-readable report
+
+What it does:
+
+  * Strips knack shim blocks from every detected agent config
+    (CLAUDE.md, AGENTS.md, Cursor `.mdc`, etc.).
+  * Removes per-skill shim files written by previous `pull` /
+    `publish` runs.
+  * Clears the auth credential (`~/.knack/auth.json` + OS keyring)
+    unless `--keep-auth` is passed.
+  * Removes `~/.knack/installed.json` and
+    `~/.knack/update-check.json`.
+
+It does NOT remove the binary itself. The running `knack` process
+cannot reliably delete its own executable on Windows (file lock), so
+the binary removal happens out-of-band via the platform script:
+
+    Windows:      iwr https://cli.getknack.ai/uninstall.ps1 | iex
+    macOS/Linux:  curl -fsSL https://cli.getknack.ai/uninstall.sh | sh
+
+To get the right command for the current platform without thinking,
+agents can run:
+
+    knack uninstall --script
+
+That prints exactly the iwr or curl one-liner and exits without
+touching anything.
+
+Workspaces (`.knack/` per-project directories) are left alone by
+default because draft skills may be unpublished. Pass
+`--purge-workspaces` to opt in to removal.
+
+
+Begin with PART ONE step 1.
