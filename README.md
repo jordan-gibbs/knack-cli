@@ -1,3 +1,5 @@
+<img width="1600" height="800" alt="Hero" src="https://github.com/user-attachments/assets/7998af42-8159-472b-98d2-3ce8892609e2" />
+
 # Knack
 
 A CLI for authoring, validating, versioning, and observing agent skills.
