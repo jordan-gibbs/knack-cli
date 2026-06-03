@@ -32,7 +32,7 @@ console = "0.15"
 indicatif = "0.17"
 dirs = "5"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
-similar = "2"
+similar = "3"
 tempfile = "3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 bytes = "1"
