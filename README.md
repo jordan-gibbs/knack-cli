@@ -96,6 +96,37 @@ telemetry.
    or an `### Edge cases` bullet), then `knack publish` again. Version
    goes from 0.1.1 to 0.1.2. The git log is the history.
 
+## Run skills as slash commands
+
+`knack link <slug>` installs a published skill into every agent on your
+machine as a native `/<slug>` slash command — `~/.claude/skills/<slug>/` for
+Claude Code / Cowork, `~/.agents/skills/<slug>/` for Codex, and so on. The
+agent runs it like any built-in command. A telemetry wrapper baked into the
+linked `SKILL.md` still records a run (`knack run` → `knack mark`),
+best-effort, so linked skills keep feeding the iteration loop.
+
+```bash
+knack link monthly-close            # /monthly-close in every installed agent (global)
+knack link monthly-close --local    # this project only
+knack unlink monthly-close          # remove it
+knack link --list                   # what's linked, where
+```
+
+Linked copies are **pinned** to the version you linked — knack never
+auto-pulls a newer one, so a teammate's publish can't silently change what
+your agent runs. When a newer version is published upstream, `knack run`
+flags it (version + author) and you adopt it explicitly:
+
+```bash
+knack link --check                  # which linked skills have upstream updates, and by whom
+knack link monthly-close            # update one to the latest
+knack link --all                    # update every linked skill
+```
+
+`knack link` won't overwrite a skill you authored yourself; pass `--force`
+to replace a non-knack skill of the same name. Full details:
+`knack docs linking`.
+
 ## What works in self-host mode
 
 The full lifecycle, with no cloud round-trip:
@@ -219,8 +250,15 @@ Operating surface, when you're driving the CLI on a user's behalf:
   `4` conflict, `5` plan limit, `6` partial failure (bulk op — some
   items succeeded, some didn't), `64` usage, `70` internal. See
   `knack docs exit-codes` for the full list.
-- The canonical agent playbook is `knack info`. It fetches
-  `getknack.ai/agent.txt` and falls back to the embedded copy on offline.
+- The canonical agent playbook is `knack info` (fetches `getknack.ai/agent.txt`,
+  embedded fallback when offline). It's large (~19k tokens), so pull only the
+  section you need: `knack info --list` shows the index and
+  `knack info <slug>...` prints one or more sections (e.g. `knack info running`,
+  or `knack info interview authoring publishing`).
+- To make a published skill a real `/<slug>` command, `knack link <slug>`
+  (per-machine, `--local` for one project). Linked copies are pinned; `knack
+  run` flags upstream updates and the user adopts them with `knack link` /
+  `knack link --all`. `knack unlink <slug>` removes it.
 
 ## Contributing
 
