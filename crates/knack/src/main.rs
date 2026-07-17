@@ -50,12 +50,18 @@ async fn main() -> ExitCode {
     let result = dispatch(cli.command, client, mode).await;
 
     match result {
-        // Every error path inside `dispatch` already called `emit_err` to
-        // produce the envelope; we just translate the variant to its stable
-        // exit code here. POSIX caps exit at u8 (255), and our table never
-        // goes that high anyway.
+        // Most error paths inside `dispatch` call `emit_err` at the point of
+        // failure. But that contract is enforced by convention, and any
+        // `?`-propagated error that skipped it used to exit nonzero with NO
+        // output at all (field bug: silent `publish` / `diff` failures on the
+        // self-host backend). The boundary is the backstop: if nothing was
+        // emitted, emit here so every failure is visible. POSIX caps exit at
+        // u8 (255), and our table never goes that high anyway.
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            if !knack_cli::output::error_was_emitted() {
+                knack_cli::output::emit_err(mode, &e);
+            }
             let code = e.exit_code().0;
             ExitCode::from(code.clamp(1, 255) as u8)
         }

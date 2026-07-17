@@ -137,6 +137,23 @@ the skill folder being published. Stash or commit them first:
     knack publish my-skill
     git stash pop
 
+### `knack publish` fails with "tag does not match the content being published"
+
+Self-host publish re-reads the tagged tree after committing and
+byte-compares it against the source folder before anything is pushed.
+A mismatch almost always means a `.gitignore` rule in your registry
+repo is excluding skill files (e.g. `*.csv`, `examples/`). Remove or
+narrow the rule, delete the local tag it names, and re-publish.
+Nothing was pushed, so the remote is untouched.
+
+### Not sure which folder a publish shipped
+
+Publish prints a `from <path>` line (and a `"from"` field in `--json`)
+naming the exact source folder it synced. Verify any past release from
+first principles:
+
+    git -C <registry-clone> show "<slug>/v<X.Y.Z>:skills/<slug>/SKILL.md"
+
 ### `knack pull @owner/slug` returns 404
 
 The external pull uses the GitHub Contents API and assumes the repo is

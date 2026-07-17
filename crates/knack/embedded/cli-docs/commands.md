@@ -34,6 +34,13 @@ in both modes; the few that don't are flagged below.
         # (every github-mode skill lives in the repo's `skills/` root)
     knack validate <slug>
     knack publish <slug> [--from DIR] [--major|--minor|--patch] [--as-version X.Y.Z] [--dry-run]
+        # source folder: --from wins; otherwise .knack/drafts/<slug> →
+        # .knack/skills/<slug> → ~/.knack/skills/<slug> → (github mode)
+        # the registry clone's skills/<slug>. Both modes ship whatever
+        # that folder holds. github: syncs the folder into the registry,
+        # commits, tags <slug>/vX.Y.Z, verifies the tag byte-matches the
+        # source, then pushes. --dry-run prints the file manifest in
+        # both modes without touching anything.
     knack edit <slug> --name "..." --description "..." --scope ...        # cloud only
 
 ### Discovery + consumption
@@ -45,7 +52,10 @@ in both modes; the few that don't are flagged below.
     knack pull @<owner>/<repo>:<slug>[@<ver>]                # external with custom repo
     knack export [--to DIR] [--scope SCOPE] [--limit N]      # cloud: bulk pull entire library
                                                               # github: prints local skills/ path
-    knack diff <slug>@<a> <slug>@<b>
+    knack diff <slug>@<a> <slug>@<b>                         # two published versions
+    knack diff <slug>@<a> <local-dir>                        # published vs local folder
+        # both modes; github resolves versions from the <slug>/v<ver> tags.
+        # compares SKILL.md, meta.knack.yaml (+ legacy intuition.md)
 
 ### Running + telemetry
 

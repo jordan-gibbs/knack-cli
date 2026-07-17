@@ -227,10 +227,14 @@ stay around for replay and audit.
     knack pull <slug>@0.1.0          # historical pull
     knack run <slug>@0.1.0           # pin a Run to a specific version
     knack diff <slug>@0.1.0 <slug>@0.2.0
+    knack diff <slug>@0.2.0 ./my-edited-folder    # published vs local
 
-`knack diff` only compares two versions of the same slug (different
-slugs are rejected). Output is ANSI line-diff in human mode,
-structured per-file unified-diff strings in `--json`.
+`knack diff` compares two versions of the same slug (different slugs
+are rejected), or one version against a local skill folder. Works in
+both modes — self-host reads the `<slug>/v<ver>` git tags. Comparison
+surface is SKILL.md + meta.knack.yaml (+ legacy intuition.md); files
+under examples/ etc. are not diffed. Output is ANSI line-diff in human
+mode, structured per-file unified-diff strings in `--json`.
 
 ## Teams
 

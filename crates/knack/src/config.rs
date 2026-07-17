@@ -118,7 +118,9 @@ impl Config {
 fn load_profile() -> Option<ProfileFile> {
     let path = config_file_path()?;
     let bytes = std::fs::read(&path).ok()?;
-    serde_yaml::from_slice(&bytes).ok()
+    // BOM-tolerant: a hand-edited config.yaml saved by PowerShell 5.1 would
+    // otherwise silently fail to parse and drop the user back to cloud mode.
+    serde_yaml::from_slice(knack_types::strip_utf8_bom(&bytes)).ok()
 }
 
 /// `~/.knack/config.yaml`. Lives next to the auth file so a user's whole

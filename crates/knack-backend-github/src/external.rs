@@ -172,7 +172,7 @@ fn read_version_from_meta(files: &[SkillFile]) -> Option<String> {
     let meta = files
         .iter()
         .find(|f| f.path == std::path::Path::new("meta.knack.yaml"))?;
-    let text = std::str::from_utf8(&meta.bytes).ok()?;
+    let text = std::str::from_utf8(knack_types::strip_utf8_bom(&meta.bytes)).ok()?;
     let value: serde_yaml::Value = serde_yaml::from_str(text).ok()?;
     value
         .get("version")

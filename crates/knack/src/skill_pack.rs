@@ -142,6 +142,14 @@ fn append_file<W: Write>(
     Ok(())
 }
 
+/// Canonical file list of a skill folder — required + optional top-level
+/// files plus the optional dirs, as `(posix arcname, absolute path)` pairs.
+/// This is the single definition of "what's in a skill"; the GitHub publish
+/// path uses it so a self-host publish ships exactly what a cloud pack would.
+pub fn collect_skill_entries(root: &Path) -> Result<Vec<(String, PathBuf)>, CliError> {
+    collect_entries(root)
+}
+
 fn collect_entries(root: &Path) -> Result<Vec<(String, PathBuf)>, CliError> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
 

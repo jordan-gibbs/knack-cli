@@ -192,6 +192,13 @@ fn publish_blocking(
             }
         })?;
 
+    // The version number asserts content. Read the tagged tree back and
+    // byte-compare it against what we were asked to publish; refuse to push
+    // or report success on any mismatch. This is the invariant that would
+    // have caught the "meta-only publish commit" bug the first time it
+    // shipped a stale release.
+    verify_tagged_content(&repository, &tag_name, &package, &skill_dir)?;
+
     push_via_git_cli(local_path)?;
 
     Ok(PublishReceipt {
@@ -199,6 +206,84 @@ fn publish_blocking(
         version: package.version.clone(),
         url: format!("https://github.com/{}/{}/tree/{}", owner, repo, tag_name),
     })
+}
+
+/// Post-commit, pre-push integrity check: every file the publish was asked
+/// to ship must exist in the tagged tree with identical bytes. When the
+/// package carried explicit files (the `--from` sync path) we check all of
+/// them; for publish-in-place (empty `files`) we check the two required
+/// files on disk. The main way this trips in practice is a registry-repo
+/// `.gitignore` rule silently excluding skill files from the commit.
+fn verify_tagged_content(
+    repository: &Repository,
+    tag_name: &str,
+    package: &SkillPackage,
+    skill_dir: &Path,
+) -> BackendResult<()> {
+    let obj = repository
+        .revparse_single(&format!("refs/tags/{}", tag_name))
+        .map_err(|e| BackendError::Other(format!("verify tag: {e}")))?;
+    let commit = obj
+        .peel_to_commit()
+        .map_err(|e| BackendError::Other(format!("verify: peel tag: {e}")))?;
+    let tree = commit
+        .tree()
+        .map_err(|e| BackendError::Other(format!("verify: commit tree: {e}")))?;
+    let subdir_rel = format!("skills/{}", package.slug);
+    let entry = tree.get_path(Path::new(&subdir_rel)).map_err(|_| {
+        BackendError::Other(format!(
+            "verify: tag {} does not contain {}",
+            tag_name, subdir_rel
+        ))
+    })?;
+    let subtree = repository
+        .find_tree(entry.id())
+        .map_err(|e| BackendError::Other(format!("verify: find subtree: {e}")))?;
+    let mut tagged: Vec<SkillFile> = Vec::new();
+    walk_tree(repository, &subtree, PathBuf::new(), &mut tagged)?;
+    let tagged_map: std::collections::HashMap<&Path, &[u8]> = tagged
+        .iter()
+        .map(|f| (f.path.as_path(), f.bytes.as_slice()))
+        .collect();
+
+    let expected: Vec<(PathBuf, Vec<u8>)> = if package.files.is_empty() {
+        // Publish-in-place: the on-disk dir is the source of truth; the
+        // required files are the load-bearing minimum to assert.
+        let mut out = Vec::new();
+        for name in ["SKILL.md", "meta.knack.yaml"] {
+            let p = skill_dir.join(name);
+            if p.is_file() {
+                let bytes = fs::read(&p)
+                    .map_err(|e| BackendError::Other(format!("verify: read {name}: {e}")))?;
+                out.push((PathBuf::from(name), bytes));
+            }
+        }
+        out
+    } else {
+        package
+            .files
+            .iter()
+            .map(|f| (f.path.clone(), f.bytes.clone()))
+            .collect()
+    };
+
+    let mut bad: Vec<String> = Vec::new();
+    for (path, bytes) in &expected {
+        match tagged_map.get(path.as_path()) {
+            Some(t) if *t == bytes.as_slice() => {}
+            Some(_) => bad.push(format!("{} (content differs)", path.display())),
+            None => bad.push(format!("{} (missing from tag)", path.display())),
+        }
+    }
+    if !bad.is_empty() {
+        return Err(BackendError::Invalid(format!(
+            "tag {tag_name} does not match the content being published: {}. \
+             nothing was pushed. check the registry repo's .gitignore for rules \
+             that exclude skill files, then delete the local tag and re-publish",
+            bad.join(", ")
+        )));
+    }
+    Ok(())
 }
 
 fn has_unrelated_dirty(repo: &Repository, current_slug: &str) -> BackendResult<bool> {
@@ -442,7 +527,10 @@ fn read_summary(skill_dir: &Path) -> BackendResult<Option<SkillSummary>> {
         return Ok(None);
     }
     let bytes = fs::read(&meta_path).map_err(|e| BackendError::Other(format!("read meta: {e}")))?;
-    let meta: MetaYaml = serde_yaml::from_slice(&bytes)
+    // Tolerate a UTF-8 BOM — PowerShell 5.1's `Set-Content -Encoding utf8`
+    // writes one, and a single BOM'd meta used to break `knack list` and
+    // `publish` for every skill in the registry.
+    let meta: MetaYaml = serde_yaml::from_slice(knack_types::strip_utf8_bom(&bytes))
         .map_err(|e| BackendError::Other(format!("parse meta.knack.yaml: {e}")))?;
 
     let updated_at = fs::metadata(&meta_path)
@@ -521,6 +609,26 @@ mod tests {
     }
 
     #[test]
+    fn list_tolerates_utf8_bom_in_meta() {
+        // PowerShell 5.1's `Set-Content -Encoding utf8` writes a BOM. One
+        // BOM'd meta anywhere in the registry used to break `knack list`
+        // and `knack publish` for EVERY skill with the baffling
+        // "missing field `slug` at line 1 column 2".
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("bommed");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let mut bytes = b"\xef\xbb\xbf".to_vec();
+        bytes.extend_from_slice(
+            b"slug: bommed\nname: bommed\nauthor: t@example.com\ndescription: d\nversion: 1.2.3\n",
+        );
+        fs::write(skill_dir.join("meta.knack.yaml"), bytes).unwrap();
+        let results = list_blocking(dir.path()).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].slug, "bommed");
+        assert_eq!(results[0].version, "1.2.3");
+    }
+
+    #[test]
     fn search_still_matches_slug() {
         // Don't regress the pre-existing slug match.
         let dir = tempdir().unwrap();
@@ -584,6 +692,150 @@ mod tests {
                 .unwrap();
         }
         repo
+    }
+
+    /// Registry repo on `main` with a local bare repo as `origin`, so the
+    /// full publish path (commit → tag → verify → push) runs offline.
+    fn init_registry_with_bare_origin(root: &Path) -> (Repository, PathBuf) {
+        let bare_path = root.join("origin.git");
+        Repository::init_bare(&bare_path).unwrap();
+
+        let registry = root.join("registry");
+        let repo = Repository::init_opts(
+            &registry,
+            git2::RepositoryInitOptions::new()
+                .initial_head("main")
+                .external_template(false),
+        )
+        .unwrap();
+        {
+            let mut cfg = repo.config().unwrap();
+            cfg.set_str("user.name", "test").unwrap();
+            cfg.set_str("user.email", "test@example.com").unwrap();
+        }
+        repo.remote("origin", bare_path.to_str().unwrap()).unwrap();
+        (repo, registry)
+    }
+
+    fn commit_all(repo: &Repository, msg: &str) {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = Signature::now("test", "test@example.com").unwrap();
+        let parent = repo
+            .head()
+            .ok()
+            .and_then(|h| h.target())
+            .and_then(|oid| repo.find_commit(oid).ok());
+        let parents: Vec<&git2::Commit> = parent.as_ref().into_iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &parents)
+            .unwrap();
+    }
+
+    fn make_package(slug: &str, version: &str, files: Vec<(&str, &str)>) -> SkillPackage {
+        SkillPackage {
+            slug: slug.into(),
+            version: version.into(),
+            manifest: SkillManifest {
+                slug: slug.into(),
+                version: version.into(),
+                description: None,
+                entry: PathBuf::from("SKILL.md"),
+                assets: Vec::new(),
+                created_at: Utc::now(),
+            },
+            files: files
+                .into_iter()
+                .map(|(p, body)| SkillFile {
+                    path: PathBuf::from(p),
+                    bytes: body.as_bytes().to_vec(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn publish_with_files_syncs_content_including_deletions() {
+        // THE bug from the July 2026 field report: publish with explicit
+        // package files used to commit only a meta version bump — the
+        // actual content never reached the repo, so every tag shipped
+        // whatever was already sitting there. Pin the fix end to end:
+        // files land, stale files are deleted, the tag matches.
+        let dir = tempdir().unwrap();
+        let (repo, registry) = init_registry_with_bare_origin(dir.path());
+
+        // Pre-existing (stale) skill content, committed.
+        let stale_dir = registry.join("skills/alpha");
+        fs::create_dir_all(&stale_dir).unwrap();
+        fs::write(stale_dir.join("SKILL.md"), "# Old\n").unwrap();
+        fs::write(stale_dir.join("stale-file.md"), "delete me\n").unwrap();
+        fs::write(
+            stale_dir.join("meta.knack.yaml"),
+            "slug: alpha\nversion: 0.1.0\n",
+        )
+        .unwrap();
+        commit_all(&repo, "init");
+
+        let package = make_package(
+            "alpha",
+            "0.2.0",
+            vec![
+                ("SKILL.md", "# New body\n"),
+                ("meta.knack.yaml", "slug: alpha\nversion: 0.2.0\n"),
+                ("examples/README.md", "fresh example\n"),
+            ],
+        );
+        let receipt = publish_blocking(&registry, "o", "r", package).unwrap();
+        assert_eq!(receipt.version, "0.2.0");
+
+        // The tag must contain exactly the new content.
+        let pulled = pull_blocking(&registry, "alpha", Some("0.2.0")).unwrap();
+        let by_path: std::collections::HashMap<String, &[u8]> = pulled
+            .files
+            .iter()
+            .map(|f| (f.path.to_string_lossy().replace('\\', "/"), f.bytes.as_slice()))
+            .collect();
+        assert_eq!(by_path.get("SKILL.md").copied(), Some("# New body\n".as_bytes()));
+        assert_eq!(
+            by_path.get("examples/README.md").copied(),
+            Some("fresh example\n".as_bytes())
+        );
+        assert!(
+            !by_path.contains_key("stale-file.md"),
+            "files absent from the package must be deleted from the published tree"
+        );
+    }
+
+    #[test]
+    fn publish_refuses_success_when_gitignore_swallows_content() {
+        // The post-commit verify: if a registry .gitignore rule excludes a
+        // skill file from the commit, the tag silently misses content —
+        // exactly the class of loss the version number is supposed to rule
+        // out. Publish must fail loudly and must not push.
+        let dir = tempdir().unwrap();
+        let (repo, registry) = init_registry_with_bare_origin(dir.path());
+        fs::write(registry.join(".gitignore"), "*.secret\n").unwrap();
+        commit_all(&repo, "init");
+
+        let package = make_package(
+            "beta",
+            "0.1.0",
+            vec![
+                ("SKILL.md", "# Beta\n"),
+                ("meta.knack.yaml", "slug: beta\nversion: 0.1.0\n"),
+                ("notes.secret", "will be gitignored\n"),
+            ],
+        );
+        let err = publish_blocking(&registry, "o", "r", package).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("does not match") && msg.contains("notes.secret"),
+            "expected a content-mismatch error naming the missing file, got: {msg}"
+        );
     }
 
     #[test]

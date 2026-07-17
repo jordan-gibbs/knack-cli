@@ -303,7 +303,7 @@ pub(super) fn resolve_push_flag(
 
 fn read_meta_version(skill_dir: &std::path::Path) -> Result<String, std::io::Error> {
     let bytes = std::fs::read(skill_dir.join("meta.knack.yaml"))?;
-    let parsed: serde_yaml::Value = serde_yaml::from_slice(&bytes)
+    let parsed: serde_yaml::Value = serde_yaml::from_slice(knack_types::strip_utf8_bom(&bytes))
         .map_err(|e| std::io::Error::other(format!("parse meta: {e}")))?;
     Ok(parsed
         .get("version")

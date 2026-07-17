@@ -83,8 +83,10 @@ telemetry.
    (procedure plus the `## Intuition` subsections) and `examples/`.
 2. Validate. `knack validate my-skill` catches schema mistakes locally
    before you burn a version number.
-3. Publish. `knack publish my-skill` bumps the version, commits, tags,
-   pushes. Tag is `my-skill/v<X.Y.Z>`. Immutable.
+3. Publish. `knack publish my-skill` bumps the version, syncs the
+   folder's content into the registry, commits, tags, verifies the tag
+   matches the folder byte for byte, pushes. Tag is `my-skill/v<X.Y.Z>`.
+   Immutable.
 4. Run. `knack run my-skill --input ...`. The agent does the actual work
    using SKILL.md as its playbook. CLI generates the `run_id` and writes
    the `started` event.
@@ -138,7 +140,7 @@ The full lifecycle, with no cloud round-trip:
 | `knack auth login` | Probes `gh api user` and reports whether gh is installed + authenticated. No Knack token minted; the gh credential is what every subsequent command uses. |
 | `knack create <slug>` | Scaffolds a new skill folder in your clone |
 | `knack validate <slug>` | Pre-flight checks `SKILL.md` + `meta.knack.yaml` + `tests/` |
-| `knack publish <slug>` | Bumps version in `meta.knack.yaml`, commits, tags `<slug>/v<X.Y.Z>`, pushes |
+| `knack publish <slug>` | Syncs the source folder into the registry (`--from` wins; otherwise workspace → registry clone), bumps version in `meta.knack.yaml`, commits, tags `<slug>/v<X.Y.Z>`, verifies the tag byte-matches the source, pushes |
 | `knack list` | Walks your local clone, shows every skill + current version |
 | `knack search <q>` | Greps the local clone for matches in slug / description / SKILL.md |
 | `knack pull <slug>` | Resolves the latest tag, writes the skill folder into your workspace |

@@ -71,9 +71,23 @@ pub fn emit_ok<T: Serialize>(mode: OutputMode, data: T, human: impl FnOnce()) {
     }
 }
 
+/// Set once the process has printed at least one error envelope. The main
+/// boundary checks this to guarantee no command can exit nonzero silently:
+/// most error sites call [`emit_err`] themselves, but any `?`-propagated
+/// error that skipped it gets emitted at the boundary instead. (See
+/// `main.rs` — this closed a real field bug where `publish` and `diff` on
+/// the self-host backend exited 1/2 with zero bytes of output.)
+static ERROR_EMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True if [`emit_err`] has run at least once in this process.
+pub fn error_was_emitted() -> bool {
+    ERROR_EMITTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Error envelope. Mirrors the API's `{ ok: false, error: { code, message } }`
 /// shape so agents can branch on `error.code` without per-command parsing.
 pub fn emit_err(mode: OutputMode, err: &CliError) {
+    ERROR_EMITTED.store(true, std::sync::atomic::Ordering::Relaxed);
     if mode.json {
         let env = json!({
             "$schema": SCHEMA,

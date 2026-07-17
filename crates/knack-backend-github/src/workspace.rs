@@ -92,7 +92,7 @@ pub fn read_workspace_auto_push(repo: &Path) -> Result<Option<bool>> {
     }
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("read {}", path.display()))?;
-    let cfg: WorkspaceConfig = serde_yaml::from_str(&raw)
+    let cfg: WorkspaceConfig = serde_yaml::from_str(knack_types::strip_utf8_bom_str(&raw))
         .with_context(|| format!("parse {}", path.display()))?;
     Ok(cfg.auto_push)
 }

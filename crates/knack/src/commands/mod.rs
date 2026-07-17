@@ -70,7 +70,7 @@ pub enum Command {
     /// Cloud-only meaningful surface; self-host just points at your clone.
     Export(export::ExportArgs),
 
-    /// Diff two versions of a skill (or local vs cloud)
+    /// Diff two published versions, or a local folder vs a published version
     Diff(diff::DiffArgs),
 
     /// Create a new skill shell (slug + name + scope). Run `knack publish` after.

@@ -101,3 +101,14 @@ Or pull a skill from any other user's public knack-skills repo:
     knack pull @other-user/their-repo:their-skill        # custom repo name
 
 External pulls use the GitHub Contents API; no full clone needed.
+
+## Publishing in github mode
+
+A version is a git tag on your registry repo: `<slug>/vX.Y.Z`. Publish
+resolves its source folder (`--from` wins; otherwise workspace drafts →
+workspace skills → HOME pool → the registry clone itself), syncs that
+folder into `<clone>/skills/<slug>/` (deletions included), commits,
+tags, verifies the tagged tree byte-matches the source, and pushes.
+The pull → edit → publish loop therefore ships your edited workspace
+copy — same as cloud mode. The output's `from` line names the folder
+that shipped.

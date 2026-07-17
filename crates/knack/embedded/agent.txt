@@ -968,6 +968,35 @@ PUBLISH ERROR CHEAT SHEET (what each code means and how to recover):
     Most commonly: duplicate slug on `knack create`. Different users
     can reuse a slug; one user can't repeat one. Pick a new slug.
 
+SELF-HOST (GITHUB BACKEND) GROUND TRUTH. Everything above describes
+Knack Cloud. When `~/.knack/config.yaml` says `mode: github`, publishing
+is git, not an API — this is the mental model you need to debug anything
+there:
+
+  - A version IS a git tag on the user's registry repo: `<slug>/vX.Y.Z`.
+    There is no server-side version pointer; the git history is the
+    record.
+  - `knack publish <slug>` commits the content, tags `<slug>/vX.Y.Z`,
+    and pushes. With `--from <dir>`, the folder's contents are synced
+    into the registry clone's `skills/<slug>/` (deletions included)
+    before the commit, so the tag contains exactly what the folder held.
+    Without `--from`, whatever is in the registry clone's
+    `skills/<slug>/` is what ships.
+  - Before reporting success, publish re-reads the tagged tree and
+    byte-compares it against the content it was asked to ship. On any
+    mismatch (e.g. a registry .gitignore rule swallowing skill files)
+    the publish fails loudly and nothing is pushed.
+  - `knack list` / `knack search` read `skills/*/meta.knack.yaml` from
+    the local clone's working tree; `knack pull <slug>@<ver>` reads the
+    tag.
+  - Verify any release from first principles:
+      git -C <registry> show "<slug>/v<X.Y.Z>:skills/<slug>/SKILL.md"
+  - The HTTP error codes in the cheat sheet above are cloud-only. Git
+    failures surface as GH_PUBLISH_FAILED (exit 1) with the underlying
+    git/gh stderr in the message. `--dry-run` behaves the same on both
+    backends: validates, packs locally, prints the file manifest,
+    touches nothing.
+
 
 === PART FIVE: ITERATING ===
 
@@ -977,8 +1006,10 @@ When the user wants to change a skill they already published:
   # edit, add, or delete any file in the folder with your normal tools
   knack publish <slug>                # auto-bumps patch (e.g. 1.0.0 to 1.0.1)
 
-The publish step packs whatever's currently in the local folder. To
-modify a skill:
+The publish step packs whatever's currently in the local folder — on
+both backends. (Self-host: the folder's contents are synced into the
+registry repo's `skills/<slug>/` and the tag is verified to byte-match
+before publish reports success.) To modify a skill:
   - EDIT a file: open and rewrite it, then publish.
   - ADD a file: write it into the appropriate subdir (scripts/, assets/,
     references/, examples/, tests/), then publish. It'll be in the
@@ -996,15 +1027,24 @@ changes. If they say "the date format is wrong, fix it" that's a --patch.
 If they say "also extract the matter number" that's a --minor. If they
 say "this needs a totally different input format now" that's a --major.
 
+Publishing is for durability, versioning, and sharing — it is NOT
+required for the agent to see changes. A skill run from a local folder
+(or a linked copy re-linked after edits) reflects local edits
+immediately. Don't burn a version number per tweak; publish when a
+change is worth keeping.
+
 ROLLING BACK to a previous version when a recent publish broke
 something. Two paths, pick the one that fits:
 
-1. POINT-BACK (fastest, no edits, no new version). The skill detail
-   page in the workspace (https://getknack.ai/app/skills/<id>/versions)
+1. POINT-BACK (Knack Cloud only; fastest, no edits, no new version).
+   The skill detail page in the workspace
+   (https://getknack.ai/app/skills/<id>/versions)
    has a "Make current" button on every prior version. One click moves
    the `current_version_id` pointer back to that semver. Versions are
    immutable, so nothing is destroyed — runs just resolve to the older
-   SKILL.md again. Forward-rolling uses the same button.
+   SKILL.md again. Forward-rolling uses the same button. The self-host
+   backend has no current-version pointer (a version is a git tag), so
+   roll back there with path 2 — old tags never disappear.
 
 2. PULL + REPUBLISH (when you also want to edit before re-shipping):
 

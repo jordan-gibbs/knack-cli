@@ -59,7 +59,15 @@ pub async fn run(args: PublishArgs, client: ApiClient, mode: OutputMode) -> CliR
         local_path,
     } = &client.config.backend
     {
-        return github_publish(&args, owner, repo, local_path, mode).await;
+        return github_publish(
+            &args,
+            owner,
+            repo,
+            local_path,
+            &client.config.skills_dir,
+            mode,
+        )
+        .await;
     }
 
     let dir = match args.from.clone() {
@@ -349,50 +357,72 @@ async fn github_publish(
     owner: &str,
     repo: &str,
     local_path: &Path,
+    skills_dir: &Path,
     mode: OutputMode,
 ) -> CliResult<()> {
     use knack_backend_github::GithubBackend;
     use knack_types::{Backend, SkillManifest, SkillPackage};
 
-    let skill_dir = local_path.join("skills").join(&args.slug);
-    if !skill_dir.is_dir() {
+    let registry_dir = local_path.join("skills").join(&args.slug);
+
+    // Source of the content being published. `--from <path>` wins; without
+    // it, resolve the same way the cloud path does (drafts → workspace
+    // skills → HOME pool) so the documented pull → edit → publish loop
+    // behaves identically on both backends, then fall back to the registry
+    // clone itself (registry-first authoring via `knack create`). This
+    // used to be silently ignored: `--from` was read for nothing at all
+    // and every "published" version shipped whatever was already sitting
+    // in the registry — a stale release wearing a fresh version number.
+    let source_dir = match &args.from {
+        Some(p) => p.clone(),
+        None => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            crate::workspace::resolve_existing_skill_dir(&args.slug, &cwd, skills_dir)
+                .unwrap_or_else(|| registry_dir.clone())
+        }
+    };
+
+    if !source_dir.is_dir() {
         let err = CliError::User {
             code: "PUBLISH_NO_FOLDER".into(),
-            message: format!("no skill at {}", skill_dir.display()),
-            hint: Some(format!("run `knack create {}` first", args.slug)),
+            message: format!("no skill at {}", source_dir.display()),
+            hint: Some(if args.from.is_some() {
+                "pass --from <dir> with a folder containing SKILL.md".into()
+            } else {
+                format!("run `knack create {}` first", args.slug)
+            }),
         };
         emit_err(mode, &err);
         return Err(err);
     }
 
-    // Pre-flight format validation. Before v0.7.12 this path went
-    // straight from "directory exists" to commit/tag/push, so the
-    // self-host loop would happily publish a SKILL.md missing its
-    // frontmatter — the broken artifact would land on origin/main as
-    // an immutable tag. Mirror the cloud route's gate: surface
-    // SKILL_FORMAT_INVALID up front instead of committing garbage.
-    let report = crate::skill_validators::validate_skill_folder(&skill_dir);
+    // Pre-flight format validation — on the folder that will actually ship.
+    // Before v0.7.12 this path went straight from "directory exists" to
+    // commit/tag/push, so the self-host loop would happily publish a
+    // SKILL.md missing its frontmatter — the broken artifact would land on
+    // origin/main as an immutable tag. Mirror the cloud route's gate:
+    // surface SKILL_FORMAT_INVALID up front instead of committing garbage.
+    let report = crate::skill_validators::validate_skill_folder(&source_dir);
     if !report.is_ok() {
         return Err(crate::skill_validators::emit_format_invalid(mode, report));
     }
 
     // Resolve next version. Priority: --as-version, then --major/--minor/--patch
     // bump from meta.knack.yaml's current version, then default to 0.1.0.
-    let version = resolve_github_version(args, &skill_dir)?;
-
-    // Write the bumped version back to meta.knack.yaml on disk BEFORE the
-    // publish commit. Otherwise the committed file (and any subsequent
-    // `knack run`) would still report the pre-bump value, putting the
-    // telemetry log out of sync with the git tag.
-    if !args.dry_run {
-        if let Err(e) = update_meta_version(&skill_dir, &version) {
-            let err = CliError::Internal(format!("update meta.knack.yaml: {e}"));
-            emit_err(mode, &err);
-            return Err(err);
-        }
-    }
+    let version = resolve_github_version(args, &source_dir)?;
 
     if args.dry_run {
+        // Pack (in memory, discarded) purely to produce the same manifest a
+        // cloud dry-run prints. A visible manifest is what lets a user catch
+        // "the tag won't contain what I think it does" BEFORE burning an
+        // immutable version number.
+        let packed = match crate::skill_pack::pack_skill(&source_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                emit_err(mode, &e);
+                return Err(e);
+            }
+        };
         emit_ok(
             mode,
             json!({
@@ -401,6 +431,10 @@ async fn github_publish(
                 "dry_run": true,
                 "owner": owner,
                 "repo": repo,
+                "from": source_dir.display().to_string(),
+                "files": packed.manifest.files.iter()
+                    .map(|(p, sha)| json!({ "path": p, "sha256": sha }))
+                    .collect::<Vec<_>>(),
             }),
             || {
                 println!("✓ dry-run: would publish {}@v{}", args.slug, version);
@@ -408,13 +442,53 @@ async fn github_publish(
                     "  → github.com/{}/{} (tag {}/v{})",
                     owner, repo, args.slug, version
                 );
+                for (p, sha) in &packed.manifest.files {
+                    println!("  {}  {p}", &sha[..12]);
+                }
             },
         );
         return Ok(());
     }
 
-    // Empty files signals "use what's on disk at skills/<slug>/" to the
-    // GithubBackend, so we don't have to round-trip through tarball + extract.
+    // Write the bumped version back to meta.knack.yaml on disk BEFORE the
+    // publish commit. Otherwise the committed file (and any subsequent
+    // `knack run`) would still report the pre-bump value, putting the
+    // telemetry log out of sync with the git tag.
+    if let Err(e) = update_meta_version(&source_dir, &version) {
+        let err = CliError::Internal(format!("update meta.knack.yaml: {e}"));
+        emit_err(mode, &err);
+        return Err(err);
+    }
+
+    // When publishing from an external tree, hand the backend the full file
+    // list so it wipes skills/<slug>/ and rewrites it from the source —
+    // content sync including deletions. Empty files means "publish what's
+    // already on disk at skills/<slug>/" (the publish-in-place default).
+    let files = if same_dir(&source_dir, &registry_dir) {
+        Vec::new()
+    } else {
+        let entries = match crate::skill_pack::collect_skill_entries(&source_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                emit_err(mode, &e);
+                return Err(e);
+            }
+        };
+        let mut files = Vec::with_capacity(entries.len());
+        for (arcname, abspath) in entries {
+            let bytes = std::fs::read(&abspath).map_err(|e| {
+                let err = CliError::Internal(format!("read {}: {e}", abspath.display()));
+                emit_err(mode, &err);
+                err
+            })?;
+            files.push(knack_types::SkillFile {
+                path: PathBuf::from(arcname),
+                bytes,
+            });
+        }
+        files
+    };
+
     let package = SkillPackage {
         slug: args.slug.clone(),
         version: version.clone(),
@@ -426,7 +500,7 @@ async fn github_publish(
             assets: Vec::new(),
             created_at: chrono::Utc::now(),
         },
-        files: Vec::new(),
+        files,
     };
 
     let backend = GithubBackend::new(
@@ -451,13 +525,27 @@ async fn github_publish(
             "version": receipt.version,
             "url": receipt.url,
             "backend": "github",
+            "from": source_dir.display().to_string(),
         }),
         || {
             println!("✓ {}@v{}", receipt.slug, receipt.version);
             println!("  → {}", receipt.url);
+            println!("  from {}", crate::output::display_path(&source_dir));
         },
     );
     Ok(())
+}
+
+/// True when the two paths point at the same directory. Canonicalizes so
+/// `--from <registry>/skills/<slug>` (relative, symlinked, or verbatim-
+/// prefixed on Windows) is recognized as publish-in-place; falls back to a
+/// literal compare when either side doesn't resolve (e.g. brand-new slug —
+/// the registry dir doesn't exist yet, which by definition isn't in-place).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
 }
 
 /// Rewrite the `version:` field in `meta.knack.yaml`, preserving every
@@ -466,6 +554,9 @@ async fn github_publish(
 fn update_meta_version(skill_dir: &Path, new_version: &str) -> std::io::Result<()> {
     let meta_path = skill_dir.join("meta.knack.yaml");
     let raw = std::fs::read_to_string(&meta_path)?;
+    // Drop a leading UTF-8 BOM so the rewrite heals BOM'd files (PowerShell
+    // 5.1's `Set-Content -Encoding utf8` plants one) instead of re-emitting it.
+    let raw = knack_types::strip_utf8_bom_str(&raw).to_string();
     let mut replaced = false;
     let mut out_lines: Vec<String> = Vec::with_capacity(raw.lines().count() + 1);
     for line in raw.lines() {
@@ -498,7 +589,7 @@ fn resolve_github_version(args: &PublishArgs, skill_dir: &Path) -> CliResult<Str
     let current: String = if meta_path.exists() {
         let bytes = std::fs::read(&meta_path).map_err(CliError::from)?;
         let parsed: serde_yaml::Value =
-            serde_yaml::from_slice(&bytes).map_err(|e| CliError::User {
+            serde_yaml::from_slice(knack_types::strip_utf8_bom(&bytes)).map_err(|e| CliError::User {
                 code: "META_INVALID".into(),
                 message: format!("could not parse meta.knack.yaml: {e}"),
                 hint: None,
