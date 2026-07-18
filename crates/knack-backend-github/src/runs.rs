@@ -41,16 +41,31 @@
 //! files (newest first). A `marked` event is considered authoritative;
 //! a lone `started` reports `status = "started"`.
 //!
-//! **Push policy.** Every `start_run` and `mark_run` auto-commits the
-//! affected JSONL file and pushes to `origin/main`. The commit message is
-//! `telemetry: <event> <skill> <run_id>`. Only the specific day's JSONL
-//! file is staged, so unrelated working-tree changes are NOT swept into
-//! the telemetry commit.
+//! **Push policy (batched).** Every `start_run` and `mark_run`
+//! auto-commits the affected JSONL file, but the network push is
+//! batched — a field report measured 36 of 48 registry commits as
+//! telemetry noise, with a push round-trip on the hot path of every
+//! skill use. Two mechanisms keep the history readable and the hot
+//! path local:
+//!
+//!   * **Commit collapsing.** When HEAD is an *unpushed* telemetry
+//!     commit, the new event amends it instead of stacking another
+//!     commit (`telemetry: batch (N events)`); pushed commits are never
+//!     amended. Registry history reads as a changelog of skills with
+//!     one telemetry commit per batch.
+//!   * **Threshold pushes.** The branch is pushed only once the
+//!     unpushed batch reaches [`telemetry_batch_threshold`] events
+//!     (default 10; `KNACK_TELEMETRY_BATCH=1` restores push-per-event).
+//!     `knack runs flush` pushes on demand, and any `knack publish`
+//!     carries pending telemetry commits along with it.
+//!
+//! Only the specific day's JSONL file is staged, so unrelated
+//! working-tree changes are NOT swept into the telemetry commit.
 //!
 //! Failures are best-effort: if the push fails (offline, branch diverged,
 //! whatever), the local JSONL append still succeeds and the function
-//! returns Ok with a stderr warning. The next successful `run`/`mark` or
-//! `publish` will pick up the queued commit(s) and push them along.
+//! returns Ok with a stderr warning. The next successful flush, threshold
+//! push, or `publish` will pick up the queued commit(s) and push them.
 //!
 //! **Tolerance.** The reader skips lines it can't parse (malformed,
 //! truncated, or a legacy [`knack_types::RunLog`] line from an older
@@ -91,6 +106,7 @@ pub fn append_run(repo: &Path, log: &RunLog) -> Result<()> {
         skill: Some(log.skill.clone()),
         version: None,
         agent: Some(log.agent.clone()),
+        mode: None,
         inputs: Vec::new(),
         outputs: Vec::new(),
         status: Some(status.into()),
@@ -114,6 +130,11 @@ pub struct RunEvent {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Which frontmatter mode the agent ran the skill in (partial
+    /// loading). Recorded on `started`; absent for modeless skills and
+    /// pre-modes CLIs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -155,6 +176,7 @@ pub fn start_run(
     version: &str,
     agent: Option<&str>,
     inputs: &[String],
+    mode: Option<&str>,
     push: bool,
 ) -> Result<Uuid> {
     let run_id = Uuid::new_v4();
@@ -165,6 +187,7 @@ pub fn start_run(
         skill: Some(slug.to_string()),
         version: Some(version.to_string()),
         agent: agent.map(|s| s.to_string()),
+        mode: mode.map(|s| s.to_string()),
         inputs: inputs.to_vec(),
         outputs: Vec::new(),
         status: Some("started".into()),
@@ -204,6 +227,7 @@ pub fn mark_run(
         skill: existing.skill.clone(),
         version: existing.version.clone(),
         agent: existing.agent.clone(),
+        mode: None,
         // Inputs propagate from the started event so the marked line is
         // self-contained for grep-style audits.
         inputs: existing.inputs.clone(),
@@ -543,11 +567,27 @@ fn commit_and_push_event(
         }
     }
 
-    let msg = format!("telemetry: {event} {skill} {run_id}");
+    let target = crate::git::resolve_remote(repo);
+
+    // Collapse into HEAD when it's an unpushed telemetry commit: one
+    // batch commit per push instead of two commits per skill use. Never
+    // amend anything the remote has already seen.
+    let prior_events = unpushed_telemetry_head_events(repo, &target);
+    let (commit_args, msg): (Vec<&str>, String) = match prior_events {
+        Some(n) => {
+            let m = format!("telemetry: batch ({} events)", n + 1);
+            (vec!["commit", "--amend", "-m"], m)
+        }
+        None => {
+            let m = format!("telemetry: {event} {skill} {run_id}");
+            (vec!["commit", "-m"], m)
+        }
+    };
     match Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(["commit", "-m", &msg])
+        .args(&commit_args)
+        .arg(&msg)
         .output()
     {
         Ok(o) if o.status.success() => {}
@@ -581,8 +621,23 @@ fn commit_and_push_event(
         return;
     }
 
-    // Push via system git so we inherit the user's gh credential helper.
-    let target = crate::git::resolve_remote(repo);
+    // Threshold gate: hold the push until enough events queue up. When
+    // the pending count can't be determined (no remote-tracking ref yet,
+    // e.g. a fresh repo), fall through to pushing — the conservative
+    // direction is "data reaches the team", not "data sits local".
+    let threshold = telemetry_batch_threshold();
+    if let Some(pending) = pending_telemetry_events(repo, &target) {
+        if pending < threshold {
+            return;
+        }
+    }
+
+    push_pending(repo, &target);
+}
+
+/// Push the branch via system git (inherits the user's gh credential
+/// helper). Shared by the threshold path and `knack runs flush`.
+pub fn push_pending(repo: &Path, target: &crate::git::RemoteTarget) {
     match Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -606,6 +661,97 @@ fn commit_and_push_event(
             eprintln!("knack: telemetry committed locally but couldn't invoke `git push`: {e}");
         }
     }
+}
+
+/// Events to accumulate before a telemetry push. Default 10; env
+/// `KNACK_TELEMETRY_BATCH` overrides (min 1 — i.e. push every event,
+/// the pre-batching behavior).
+pub fn telemetry_batch_threshold() -> usize {
+    std::env::var("KNACK_TELEMETRY_BATCH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| n.max(1))
+        .unwrap_or(10)
+}
+
+/// Events represented by a telemetry commit subject: `batch (N events)`
+/// carries N, a single `telemetry: …` line carries 1, anything else 0.
+fn telemetry_events_in_subject(subject: &str) -> usize {
+    let Some(rest) = subject.strip_prefix("telemetry: ") else {
+        return 0;
+    };
+    if let Some(inner) = rest
+        .strip_prefix("batch (")
+        .and_then(|r| r.strip_suffix(" events)").or_else(|| r.strip_suffix(" event)")))
+    {
+        return inner.parse::<usize>().unwrap_or(1);
+    }
+    1
+}
+
+/// When HEAD is a telemetry commit the remote has NOT seen, return how
+/// many events it already holds (so the caller can amend and bump the
+/// count). Any uncertainty — no HEAD, no remote-tracking ref, HEAD
+/// already pushed — returns None, and the caller stacks a new commit
+/// instead of rewriting anything shared.
+fn unpushed_telemetry_head_events(
+    repo: &Path,
+    target: &crate::git::RemoteTarget,
+) -> Option<usize> {
+    let head_subject = git_stdout(repo, &["log", "-1", "--format=%s"])?;
+    let events = telemetry_events_in_subject(head_subject.trim());
+    if events == 0 {
+        return None;
+    }
+    let remote_ref = format!("refs/remotes/{}/{}", target.remote, target.branch);
+    // No remote-tracking ref → can't prove HEAD is unpushed → don't amend.
+    git_stdout(repo, &["rev-parse", "--verify", "--quiet", &remote_ref])?;
+    // Exit 0 ⇒ HEAD is an ancestor of the remote tip ⇒ already pushed.
+    let pushed = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["merge-base", "--is-ancestor", "HEAD", &remote_ref])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(true);
+    if pushed {
+        None
+    } else {
+        Some(events)
+    }
+}
+
+/// Total telemetry events sitting in commits the remote hasn't seen.
+/// None when it can't be determined (no remote-tracking ref).
+fn pending_telemetry_events(repo: &Path, target: &crate::git::RemoteTarget) -> Option<usize> {
+    let remote_ref = format!("refs/remotes/{}/{}", target.remote, target.branch);
+    git_stdout(repo, &["rev-parse", "--verify", "--quiet", &remote_ref])?;
+    let range = format!("{remote_ref}..HEAD");
+    let subjects = git_stdout(repo, &["log", "--format=%s", &range])?;
+    Some(
+        subjects
+            .lines()
+            .map(|l| telemetry_events_in_subject(l.trim()))
+            .sum(),
+    )
+}
+
+/// Public wrapper for `knack runs flush`: how many telemetry events are
+/// queued locally, or None when there's no remote-tracking ref to
+/// compare against.
+pub fn pending_events(repo: &Path) -> Option<usize> {
+    let target = crate::git::resolve_remote(repo);
+    pending_telemetry_events(repo, &target)
+}
+
+/// Run git with `args`, returning trimmed stdout on success (non-empty
+/// or not — the caller decides), None on any failure.
+fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git").arg("-C").arg(repo).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(test)]
@@ -729,4 +875,133 @@ mod tests {
         assert!(!is_valid_day_file_name(OsStr::new(".gitkeep")));
         assert!(!is_valid_day_file_name(OsStr::new("2026-13-01.jsonl")));
     }
+
+    // === telemetry batching ===
+
+    /// KNACK_TELEMETRY_BATCH is process-global; serialize the tests
+    /// that set it.
+    static BATCH_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Registry repo + local bare origin with one pushed baseline
+    /// commit, so `refs/remotes/origin/main` exists and the batching
+    /// logic can prove what the remote has seen.
+    fn init_pushed_registry(root: &Path) -> PathBuf {
+        let bare = root.join("origin.git");
+        git2::Repository::init_bare(&bare).unwrap();
+        let registry = root.join("registry");
+        let repo = git2::Repository::init_opts(
+            &registry,
+            git2::RepositoryInitOptions::new()
+                .initial_head("main")
+                .external_template(false),
+        )
+        .unwrap();
+        {
+            let mut cfg = repo.config().unwrap();
+            cfg.set_str("user.name", "test").unwrap();
+            cfg.set_str("user.email", "test@example.com").unwrap();
+        }
+        repo.remote("origin", bare.to_str().unwrap()).unwrap();
+        fs::write(registry.join("README.md"), "baseline
+").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(&registry)
+            .args(["push", "origin", "main"])
+            .output()
+            .unwrap();
+        assert!(ok.status.success(), "baseline push failed: {}", String::from_utf8_lossy(&ok.stderr));
+        registry
+    }
+
+    fn head_subject(repo: &Path) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn unpushed_count(repo: &Path) -> usize {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-list", "--count", "origin/main..HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+    }
+
+    #[test]
+    fn telemetry_events_in_subject_parses_all_shapes() {
+        assert_eq!(telemetry_events_in_subject("telemetry: started foo abc"), 1);
+        assert_eq!(telemetry_events_in_subject("telemetry: batch (7 events)"), 7);
+        assert_eq!(telemetry_events_in_subject("telemetry: batch (1 event)"), 1);
+        assert_eq!(telemetry_events_in_subject("feat: real work"), 0);
+        assert_eq!(telemetry_events_in_subject(""), 0);
+    }
+
+    #[test]
+    fn consecutive_unpushed_telemetry_commits_collapse_into_one_batch() {
+        let _guard = BATCH_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let registry = init_pushed_registry(dir.path());
+
+        // Three events, push disabled: history must show ONE unpushed
+        // telemetry commit carrying all three, not three commits.
+        let id = start_run(&registry, "alpha", "1.0.0", Some("agent"), &[], None, false).unwrap();
+        assert_eq!(unpushed_count(&registry), 1);
+        assert!(head_subject(&registry).starts_with("telemetry: started alpha"));
+
+        mark_run(&registry, &id.to_string(), "succeeded", None, &[], false).unwrap();
+        assert_eq!(unpushed_count(&registry), 1);
+        assert_eq!(head_subject(&registry), "telemetry: batch (2 events)");
+
+        let _id2 = start_run(&registry, "alpha", "1.0.0", Some("agent"), &[], None, false).unwrap();
+        assert_eq!(unpushed_count(&registry), 1);
+        assert_eq!(head_subject(&registry), "telemetry: batch (3 events)");
+    }
+
+    #[test]
+    fn threshold_batches_pushes_and_never_amends_pushed_commits() {
+        let _guard = BATCH_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("KNACK_TELEMETRY_BATCH", "2");
+        let dir = tempdir().unwrap();
+        let registry = init_pushed_registry(dir.path());
+        let bare = dir.path().join("origin.git");
+        let bare_tip = || {
+            let r = git2::Repository::open(&bare).unwrap();
+            r.refname_to_id("refs/heads/main").unwrap()
+        };
+        let baseline = bare_tip();
+
+        // Event 1: below threshold — committed locally, NOT pushed.
+        let id = start_run(&registry, "alpha", "1.0.0", Some("agent"), &[], None, true).unwrap();
+        assert_eq!(bare_tip(), baseline, "first event must not push yet");
+        assert_eq!(pending_events(&registry), Some(1));
+
+        // Event 2: threshold reached — batch of 2 pushes.
+        mark_run(&registry, &id.to_string(), "succeeded", None, &[], true).unwrap();
+        assert_ne!(bare_tip(), baseline, "threshold must trigger the push");
+        assert_eq!(pending_events(&registry), Some(0));
+
+        // Event 3: HEAD is now pushed — must stack a NEW commit, never
+        // amend shared history.
+        let pushed_tip = bare_tip();
+        let _id2 = start_run(&registry, "alpha", "1.0.0", Some("agent"), &[], None, true).unwrap();
+        assert_eq!(bare_tip(), pushed_tip, "one fresh event stays below threshold");
+        assert_eq!(unpushed_count(&registry), 1);
+        assert!(head_subject(&registry).starts_with("telemetry: started alpha"));
+
+        std::env::remove_var("KNACK_TELEMETRY_BATCH");
+    }
+
 }

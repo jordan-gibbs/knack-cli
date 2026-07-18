@@ -26,6 +26,7 @@ pub mod rate;
 pub mod run;
 pub mod runs;
 pub mod search;
+pub mod status;
 pub mod sync;
 pub mod team;
 pub mod uninstall;
@@ -95,6 +96,9 @@ pub enum Command {
     /// Analyze past runs: list / show / stats / diff across versions
     #[command(subcommand)]
     Runs(runs::RunsCmd),
+
+    /// Show local copies of a skill vs the published version (truth command)
+    Status(status::StatusArgs),
 
     /// Print embedded docs (offline)
     Docs(docs::DocsArgs),
@@ -251,6 +255,7 @@ pub async fn dispatch(cmd: Command, client: ApiClient, mode: OutputMode) -> CliR
         Command::Run(a) => run::run(a, client, mode).await,
         Command::Mark(a) => mark::run(a, client, mode).await,
         Command::Runs(c) => runs::run(c, client, mode).await,
+        Command::Status(a) => status::run(a, client, mode).await,
         Command::Docs(a) => docs::run(a, mode),
         Command::Introspect(a) => introspect::run(a, mode),
         Command::Completions(a) => completions::run(a, mode),

@@ -593,6 +593,7 @@ mod tests {
         SkillFrontmatter {
             name: Some(name.into()),
             description: Some(desc.into()),
+            modes: None,
         }
     }
 

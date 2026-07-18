@@ -766,6 +766,39 @@ description has to do real selection work.
       second clause naming file types, request patterns, or domain words.>
     ---
 
+MODES (add only when the skill genuinely has distinct usage modes).
+If the skill covers more than one job — say a writing skill that
+drafts both emails and articles — declare the modes and the files
+each one needs in the frontmatter, so a runner loads only the
+relevant slice instead of the whole folder every time:
+
+    ---
+    name: ...
+    description: ...
+    modes:
+      email:
+        description: short-form email drafting
+        load:
+          - references/style-guide.md
+          - examples/email-*.md
+      article:
+        load:
+          - references/style-guide.md
+          - examples/article-*.md
+    ---
+
+Rules for modes:
+  - `load` paths are relative to the skill folder; `*` matches within
+    one path segment (no `**`). Name example files BY MODE
+    (`examples/email-<n>.md`, `examples/article-<n>.md`) so the
+    patterns stay obvious.
+  - Shared material (the style guide, core rules) appears in every
+    mode's list; SKILL.md itself is always loaded and never listed.
+  - `knack validate` fails publish if a `load` pattern matches no
+    file — a manifest pointing at nothing would silently load nothing.
+  - Single-purpose skills should NOT declare modes. One mode is
+    ceremony with no token savings.
+
     # <Sentence-case title>
 
     <2-4 paragraphs: what, inputs, outputs, the shape of work. Use the
@@ -1002,9 +1035,21 @@ there:
 
 When the user wants to change a skill they already published:
 
+  knack status <slug>                 # FIRST: which copy is real?
   knack pull <slug>                   # writes the latest into .knack/skills/<slug>/
   # edit, add, or delete any file in the folder with your normal tools
   knack publish <slug>                # auto-bumps patch (e.g. 1.0.0 to 1.0.1)
+
+`knack status` is the truth command. A skill can exist in up to four
+places (workspace draft, workspace skill, HOME pool, and — self-host —
+the registry clone), and editing the copy that `publish` doesn't
+resolve is how stale publishes happen. `knack status <slug>` shows
+every local copy, marks the one this directory resolves (→), flags
+copies that disagree with each other, and lists which files differ
+from the latest published version. Bare `knack status` is the offline
+overview across all local skills. Related: `knack diff <slug> <path>`
+now accepts a bare slug meaning "latest published version", so
+"what did I change locally?" is one command with no version string.
 
 The publish step packs whatever's currently in the local folder — on
 both backends. (Self-host: the folder's contents are synced into the
@@ -1104,13 +1149,43 @@ The flow is four steps:
      the run (e.g. `--runtime claude-code`, `--runtime cursor`); it's
      pure metadata for stats — defaults to "agent" if omitted.
 
+     `--mode <name>` — if the skill declares `modes:` in its SKILL.md
+     frontmatter (multi-mode skills, e.g. `email` vs `article` in a
+     writing skill), pass the mode you're running in. Two payoffs:
+     the run output's `mode_load` lists EXACTLY the files that mode
+     needs (see step 4 — load only those), and the mode is recorded
+     in telemetry so per-mode success rates exist later. A typo'd
+     mode errors up front with the available names.
+
+     The run output also includes `source` — the on-disk copy of the
+     skill this machine resolves (workspace draft → workspace skill →
+     HOME pool). READ THAT PATH in step 4, not a guessed one; if it
+     isn't the copy you expected, run `knack status <slug>` before
+     doing any work.
+
+     AUTO-CLOSE. Starting a new run of a skill auto-closes this
+     machine's previous still-open run of the SAME skill as
+     `abandoned` (a no-verdict status excluded from success-rate —
+     never a fabricated `succeeded`). Open runs of OTHER skills are
+     untouched, so interleaved multi-skill work is safe. Opt out with
+     `--keep-open` or `KNACK_NO_AUTO_CLOSE=1` if you genuinely run
+     the same skill twice in parallel.
+
   4. DO THE WORK YOURSELF.
-     Read `.knack/skills/<slug>/SKILL.md`. Follow its `## How to do
-     it` section, applying every rule in `## Intuition`. Use your
-     normal tools (Read / Write / Edit / Bash). Run any
+     Read SKILL.md from the `source` path step 3 printed. Follow its
+     `## How to do it` section, applying every rule in `## Intuition`.
+     Use your normal tools (Read / Write / Edit / Bash). Run any
      `scripts/*` the skill ships if SKILL.md tells you to. If the
      skill declares `requires_secrets:` and a secret is missing, stop
      and surface the gap (see step 2).
+
+     PARTIAL LOADING. If you passed `--mode` and the run output
+     carried a `mode_load` list, read SKILL.md plus ONLY those files.
+     Do not read the other modes' examples "for context" — the whole
+     point of modes is that an email job doesn't pay for the article
+     examples on every use. If the skill has `modes:` and you didn't
+     pass `--mode`, pick the mode that matches the task and re-run
+     step 3 with it rather than loading the entire folder.
 
   5. SHOW THE USER YOUR OUTPUT AND WAIT FOR SIGN-OFF.
      This is the load-bearing step of the whole iteration loop. DO
@@ -1148,12 +1223,18 @@ The flow is four steps:
      what the skill author reads next time they iterate on the skill.
 
   6. CLOSE THE LOOP (only after the user has signed off in step 5).
-       knack mark <run-id> succeeded
-       knack mark <run-id> failed --note "<what went wrong>"
+       knack mark last succeeded
+       knack mark last failed --note "<what went wrong>"
+
+     `last` resolves to the newest unmarked run YOU started on this
+     machine (per-backend), so you never need to carry the UUID in
+     context. Full UUIDs and unique id prefixes (≥4 hex chars,
+     git-style: `knack mark f887 succeeded`) also work — use those
+     when closing a run other than your most recent one.
 
      `--output` is REPEATABLE. If the run produced files, record each
      one so the telemetry log knows what came out:
-       knack mark <run-id> succeeded \
+       knack mark last succeeded \
          --output ./out/report.pdf \
          --output ./out/summary.md \
          --note "clean run, 3 files in scope"
@@ -1170,15 +1251,24 @@ The flow is four steps:
      reported per-id in the output.
        knack mark <id1>,<id2>,<id3> succeeded --note "batch ok"
 
-     SELF-HOST AUTO-PUSH. In github mode every `run` / `mark` also
-     git-pushes the telemetry commit to origin's default branch. Three
-     opt-outs, in precedence:
+     SELF-HOST TELEMETRY IS BATCHED. In github mode every `run` /
+     `mark` commits the telemetry locally (instant, offline-safe), but
+     the network push is batched: consecutive unpushed telemetry
+     commits collapse into one `telemetry: batch (N events)` commit,
+     and the branch pushes only when the batch reaches 10 events
+     (env `KNACK_TELEMETRY_BATCH` tunes it; `1` = push every event).
+     Registry history stays a changelog of skills, and the hot path of
+     using a skill never waits on the network. Pending telemetry also
+     rides along with any `knack publish`. To push on demand (end of a
+     session, before handing off):
+       knack runs flush
+     Opt-outs for the push entirely, in precedence:
        knack run --no-push          (per-invocation)
        KNACK_AUTO_PUSH=0 knack run  (per-shell env)
        <repo>/knack.yaml:
          auto_push: false           (persistent per-workspace)
      The local commit always lands; only the network hop is skipped,
-     so the next pushed event catches up. The remote name and default
+     so the next flush / publish catches up. The remote name and default
      branch are resolved per-repo (env override → `git symbolic-ref` →
      `gh repo view` → `origin/main` fallback), so repos with `master`,
      fork workflows, or non-`origin` remotes don't need configuration.
@@ -1642,7 +1732,9 @@ like:
 
 This is a passive notice. The command that printed it already ran;
 its real output is everywhere except that one line. Do NOT retry the
-command or treat the banner as an error.
+command or treat the banner as an error. It prints at most once per
+24 hours (cross-process, stamped in the cache file), so a session
+never sees it twice.
 
 When you see the banner, tell the user a newer knack is out and
 suggest running `knack upgrade` at a good moment. The command runs

@@ -54,27 +54,47 @@ in both modes; the few that don't are flagged below.
                                                               # github: prints local skills/ path
     knack diff <slug>@<a> <slug>@<b>                         # two published versions
     knack diff <slug>@<a> <local-dir>                        # published vs local folder
+    knack diff <slug> <local-dir>                            # bare slug = latest published
         # both modes; github resolves versions from the <slug>/v<ver> tags.
         # compares SKILL.md, meta.knack.yaml (+ legacy intuition.md)
+    knack status [<slug>]                                    # truth command
+        # every local copy of the skill (workspace draft/skill, HOME
+        # pool, registry clone), which one this CWD resolves for
+        # publish/run (→), whether copies disagree, and which files
+        # differ from the latest published version. Bare `knack status`
+        # is the offline all-skills overview.
 
 ### Running + telemetry
 
     knack run <slug>[@<semver>] [--input PATH]... [--runtime TAG] \
-                                [--agent-id ID] [--no-push]
-    knack mark <run_id>[,<run_id>...] succeeded|failed \
+                                [--mode NAME] [--agent-id ID] \
+                                [--keep-open] [--no-push]
+    knack mark last|<run_id>[,<run_id>...] succeeded|failed|abandoned \
                                 [--note "..."] [--reason "..."] \
                                 [--output PATH]... [--no-push]
 
-`--input` and `--output` are repeatable. `mark` accepts a comma-separated
-list of run-ids to verdict several runs in one call; the same `--note`
-and `--output` apply to every id.
+`--input` and `--output` are repeatable. `mark` accepts `last` (the
+newest unmarked run started from this machine, per backend), a full
+UUID, a unique id prefix of ≥4 hex chars (git-style), or a
+comma-separated list of ids; the same `--note` and `--output` apply
+to every id. `run` prints the resolved `source` path of the skill copy
+this machine reads, and auto-closes the machine's previous still-open
+run of the SAME skill as `abandoned` (no-verdict status, excluded from
+success-rate); `--keep-open` / `KNACK_NO_AUTO_CLOSE=1` opt out.
 
-In github mode every `run` and `mark` auto-commits the affected JSONL
-day-file and pushes to the repo's default remote/branch (commit message:
-`telemetry: <event> <skill> <run_id>`). The local append always succeeds
-even when the push fails (offline, branch diverged); a stderr warning
-tells you how to recover, and the next successful command carries the
-queued commits.
+`--mode NAME` runs a multi-mode skill (frontmatter `modes:`) in one
+declared mode: the output's `mode_load` lists exactly the files that
+mode needs, and the mode is recorded in telemetry. Unknown modes error
+up front with the available names.
+
+In github mode every `run` and `mark` commits the affected JSONL
+day-file locally; the push is batched. Consecutive unpushed telemetry
+commits collapse into one `telemetry: batch (N events)` commit, and the
+branch pushes when the batch reaches 10 events (`KNACK_TELEMETRY_BATCH`
+tunes; `1` = push per event), on `knack runs flush`, or along with any
+`knack publish`. The local append always succeeds even when the push
+fails (offline, branch diverged); a stderr warning tells you how to
+recover, and the next flush / publish carries the queued commits.
 
 The push target is resolved per-repo: `KNACK_REMOTE_NAME` /
 `KNACK_REMOTE_BRANCH` env vars override; otherwise `git symbolic-ref
@@ -102,6 +122,8 @@ Three opt-outs for the auto-push (local commit still lands either way):
     knack runs trend <slug> [--interval day|week] \
                             [--group-by DIMS] [--since DATE] [--until DATE]
     knack runs diff <slug> <ver-a> <ver-b> [--since DATE] [--until DATE]
+    knack runs flush                        # self-host: push queued telemetry now
+    knack status [<slug>]                   # local copies vs published (truth command)
 
 `--since` / `--until` accept `YYYY-MM-DD` or `<N>d` (e.g. `7d` = seven
 days back). Default window for `runs list` / `stats` / `trend`: 30 days

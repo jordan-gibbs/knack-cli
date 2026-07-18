@@ -9,6 +9,7 @@ use clap::Parser;
 
 use knack_cli::commands::{build_client, dispatch, Command, GlobalArgs};
 use knack_cli::config::Config;
+use knack_cli::update_check;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -47,7 +48,16 @@ async fn main() -> ExitCode {
     let config = Config::load();
     let client = build_client(config, &cli.global);
 
+    // Fire-and-forget refresh of the version cache (≤ once per 24h,
+    // 3s-capped, never awaited). The banner below reads whatever the
+    // cache holds now; a refresh benefits the NEXT invocation.
+    update_check::spawn_refresh(env!("CARGO_PKG_VERSION").to_string());
+
     let result = dispatch(cli.command, client, mode).await;
+
+    // Last stderr line agents see; suppressed under --json / --quiet /
+    // KNACK_NO_UPDATE_CHECK and throttled to once per 24h.
+    update_check::print_update_banner_once(mode, env!("CARGO_PKG_VERSION"));
 
     match result {
         // Most error paths inside `dispatch` call `emit_err` at the point of

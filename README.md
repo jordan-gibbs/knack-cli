@@ -90,9 +90,10 @@ telemetry.
 4. Run. `knack run my-skill --input ...`. The agent does the actual work
    using SKILL.md as its playbook. CLI generates the `run_id` and writes
    the `started` event.
-5. Mark. `knack mark <run-id> succeeded --output ...` (or
-   `failed --reason "..."`). The note text feeds back into the next
-   interview pass.
+5. Mark. `knack mark last succeeded --output ...` (or
+   `failed --reason "..."`). `last` resolves to your newest unmarked
+   run on this machine; full UUIDs and unique id prefixes also work.
+   The note text feeds back into the next interview pass.
 6. Bump. When a miss matters, edit the relevant subsection of
    `SKILL.md`'s `## Intuition` block (add an `### Except when` carve-out
    or an `### Edge cases` bullet), then `knack publish` again. Version
@@ -148,14 +149,16 @@ The full lifecycle, with no cloud round-trip:
 | `knack pull @other-user/<slug>` | Fetches from any public `<owner>/knack-skills` repo via the GitHub Contents API |
 | `knack pull @other-user/<repo>:<slug>@<ver>` | Full external spec: owner, repo, slug, optional version |
 | `knack export` | Self-host: points at the local `skills/` directory (no work to do). Cloud: bulk-pulls every skill in the library into `./knack-export-<date>/<scope>/<slug>/`. |
-| `knack run <slug> --input ... --input ...` | Registers a run, writes a `started` event to local JSONL with all inputs. `--no-push` skips the telemetry git push (so does `KNACK_AUTO_PUSH=0` or `auto_push: false` in `knack.yaml`). |
-| `knack mark <run-id> succeeded --output ... --output ... --note ...` | Closes the loop with outputs, note, and a computed `duration_ms`. Pass a comma-separated list (`a,b,c`) to bulk-verdict several runs at once. |
+| `knack run <slug> --input ... --input ...` | Registers a run, writes a `started` event to local JSONL with all inputs, prints the resolved `source` path, and auto-closes your previous open run of the same skill as `abandoned` (`--keep-open` / `KNACK_NO_AUTO_CLOSE=1` opt out). `--mode <name>` runs one declared frontmatter mode and lists that mode's file set. `--no-push` skips the telemetry git push (so does `KNACK_AUTO_PUSH=0` or `auto_push: false` in `knack.yaml`). |
+| `knack mark last\|<run-id> succeeded --output ... --note ...` | Closes the loop with outputs, note, and a computed `duration_ms`. `last` = newest unmarked run started from this machine; unique id prefixes (≥4 hex chars) resolve git-style. Pass a comma-separated list (`a,b,c`) to bulk-verdict several runs at once. |
+| `knack status [<slug>]` | Truth command: every local copy of a skill (workspace draft/skill, HOME pool, registry clone), which one this directory resolves for publish/run, whether copies disagree, and which files differ from the latest published version. |
 | `knack runs overview [--team <slug-or-id>]` | Portfolio dashboard: every skill the caller can read, with `regression` and `stale` flags. `--team` scopes to one team's library (cloud only). |
 | `knack runs list <slug>` | Page past runs, filter by `--status`, `--version`, `--agent`, `--since`, `--until`, `--note-contains` |
 | `knack runs show <run-id>` | Single run snapshot, including the note and computed duration |
 | `knack runs stats <slug> --group-by [version\|agent\|version,agent]` | Cohort rollup; supports cross-tab grouping |
 | `knack runs trend <slug> --interval day\|week` | Time-bucketed series; every period emits a point (gap-free) |
 | `knack runs diff <slug> <ver-a> <ver-b>` | Side-by-side cohort comparison; deltas `null` when either cohort empty |
+| `knack runs flush` | Self-host: push queued telemetry commits now (no-op on cloud) |
 
 ## Run telemetry schema
 
@@ -195,14 +198,18 @@ modes; in cloud mode it also lands server-side for the rollups.
 (computed from the two events' timestamps). Fields are documented in
 [`crates/knack-backend-github/src/runs.rs`](crates/knack-backend-github/src/runs.rs).
 
-**Push policy.** Every `knack run` and `knack mark` auto-commits the
-affected JSONL file and pushes to the repo's default remote/branch.
-The commit message is `telemetry: <event> <skill> <run_id>`. Only the
-day's JSONL is staged, so unrelated working-tree changes are NOT swept
-into the telemetry commit. If the push fails (offline, branch diverged),
-the local append still succeeds and the CLI prints a stderr warning
-telling you how to recover; the next successful `run` / `mark` /
-`publish` carries the queued commits.
+**Push policy (batched).** Every `knack run` and `knack mark` commits
+the affected JSONL file locally, but the network push is batched so the
+hot path of using a skill never waits on git, and registry history
+stays a changelog of skills: consecutive unpushed telemetry commits
+collapse into one `telemetry: batch (N events)` commit, and the branch
+pushes once the batch reaches 10 events (`KNACK_TELEMETRY_BATCH`
+overrides; `1` restores push-per-event), on `knack runs flush`, or
+along with any `knack publish`. Only the day's JSONL is staged, so
+unrelated working-tree changes are NOT swept into the telemetry commit.
+If the push fails (offline, branch diverged), the local append still
+succeeds and the CLI prints a stderr warning telling you how to
+recover; the next flush / publish carries the queued commits.
 
 The remote name and default branch are resolved per-repo (in order):
 `KNACK_REMOTE_NAME` / `KNACK_REMOTE_BRANCH` env vars → local

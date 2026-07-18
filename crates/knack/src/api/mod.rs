@@ -57,6 +57,16 @@ fn nudge_keyring_fallback_once() {
 /// can layer in future ones (`feedback,deprecated_cli`, …) without
 /// breaking older CLIs.
 fn maybe_print_notices_banner(headers: &reqwest::header::HeaderMap) {
+    // Piggyback: harvest the latest-CLI-version header into the
+    // update-check cache. This is the zero-cost path for cloud users —
+    // the request already happened; no extra network call ever fires.
+    if let Some(v) = headers
+        .get("x-knack-cli-latest")
+        .and_then(|v| v.to_str().ok())
+    {
+        crate::update_check::record_latest(v);
+    }
+
     let Some(value) = headers.get("X-Knack-Notices") else {
         return;
     };

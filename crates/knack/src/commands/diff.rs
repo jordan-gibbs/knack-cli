@@ -35,7 +35,20 @@ pub struct DiffArgs {
 #[derive(Debug)]
 enum SideSpec {
     Version { slug: String, ver: String },
+    /// Bare slug — resolves to the latest published version at load
+    /// time. Enables the "local vs published" form without knowing the
+    /// version string: `knack diff monthly-close ./monthly-close`.
+    Latest { slug: String },
     Local(PathBuf),
+}
+
+impl SideSpec {
+    fn slug(&self) -> Option<&str> {
+        match self {
+            SideSpec::Version { slug, .. } | SideSpec::Latest { slug } => Some(slug),
+            SideSpec::Local(_) => None,
+        }
+    }
 }
 
 /// The three comparable text files of one side, plus its display label.
@@ -51,8 +64,7 @@ pub async fn run(args: DiffArgs, client: ApiClient, mode: OutputMode) -> CliResu
     let left = parse_side(&args.left)?;
     let right = parse_side(&args.right)?;
 
-    if let (SideSpec::Version { slug: l, .. }, SideSpec::Version { slug: r, .. }) = (&left, &right)
-    {
+    if let (Some(l), Some(r)) = (left.slug(), right.slug()) {
         if l != r {
             let err = CliError::User {
                 code: "DIFF_DIFFERENT_SKILLS".into(),
@@ -131,24 +143,60 @@ fn parse_side(s: &str) -> CliResult<SideSpec> {
             });
         }
     }
+    // A bare slug means "the latest published version" — the field-report
+    // gap: `knack diff <slug> <local-path>` used to be rejected here even
+    // though the help text advertised local-vs-published diffs.
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Ok(SideSpec::Latest {
+            slug: s.to_string(),
+        });
+    }
     Err(CliError::User {
         code: "DIFF_USAGE".into(),
-        message: format!("expected `<slug>@<semver>` or a local skill folder path, got `{s}`"),
-        hint: Some("e.g. `knack diff monthly-close@1.0.0 monthly-close@1.1.0` or `knack diff monthly-close@1.0.0 ./monthly-close`".into()),
+        message: format!(
+            "expected `<slug>`, `<slug>@<semver>`, or a local skill folder path, got `{s}`"
+        ),
+        hint: Some("e.g. `knack diff monthly-close ./monthly-close` (bare slug = latest published) or `knack diff monthly-close@1.0.0 monthly-close@1.1.0`".into()),
     })
 }
 
 async fn load_side(client: &ApiClient, spec: SideSpec) -> CliResult<SideTexts> {
     match spec {
         SideSpec::Local(dir) => load_local(&dir),
-        SideSpec::Version { slug, ver } => {
-            if let BackendMode::Github { local_path, .. } = &client.config.backend {
-                load_github_version(local_path, &slug, &ver).await
-            } else {
-                load_cloud_version(client, &slug, &ver).await
-            }
+        SideSpec::Latest { slug } => {
+            let ver = resolve_latest(client, &slug).await?;
+            load_versioned(client, &slug, &ver).await
         }
+        SideSpec::Version { slug, ver } => load_versioned(client, &slug, &ver).await,
     }
+}
+
+async fn load_versioned(client: &ApiClient, slug: &str, ver: &str) -> CliResult<SideTexts> {
+    if let BackendMode::Github { local_path, .. } = &client.config.backend {
+        load_github_version(local_path, slug, ver).await
+    } else {
+        load_cloud_version(client, slug, ver).await
+    }
+}
+
+/// Latest published semver: registry tags (self-host) or the skill's
+/// current-version pointer (cloud).
+async fn resolve_latest(client: &ApiClient, slug: &str) -> CliResult<String> {
+    if let BackendMode::Github { local_path, .. } = &client.config.backend {
+        return knack_backend_github::latest_published_version(local_path, slug).ok_or_else(
+            || CliError::NotFound(format!("skill `{slug}` has no published versions")),
+        );
+    }
+    let skill = match api_skills::find_by_slug(client, slug).await? {
+        Some(s) => s,
+        None => return Err(CliError::NotFound(format!("skill `{slug}` not found"))),
+    };
+    skill
+        .current_version_semver
+        .ok_or_else(|| CliError::NotFound(format!("skill `{slug}` has no published version")))
 }
 
 fn load_local(dir: &Path) -> CliResult<SideTexts> {
@@ -259,8 +307,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_side_rejects_bare_slug() {
-        let err = parse_side("foo").unwrap_err();
+    fn parse_side_bare_slug_means_latest() {
+        match parse_side("foo").unwrap() {
+            SideSpec::Latest { slug } => assert_eq!(slug, "foo"),
+            other => panic!("expected latest spec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_side_rejects_non_slug_garbage() {
+        // Not a dir, not slug@ver, not slug charset (uppercase + underscore).
+        let err = parse_side("Not_A_Slug").unwrap_err();
         assert_eq!(err.code(), "DIFF_USAGE");
     }
 

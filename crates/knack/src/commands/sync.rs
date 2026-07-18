@@ -1,16 +1,22 @@
 //! `knack sync` — no-op in the meta-skill model; kept for API stability.
 //!
-//! Pre-0.4 versions wrote per-skill shims into each installed agent's
-//! native discovery surface (`~/.claude/skills/<slug>/SKILL.md`,
-//! `~/.agents/skills/<slug>/SKILL.md`, etc.) after every pull/publish.
-//! The 0.4 meta-skill model dropped that: agents discover individual
-//! skills via `knack list` at session time, not via on-disk shims, so
-//! the per-skill write loop is gone.
+//! How skills reach an agent today (one model, two tiers):
 //!
-//! What's left:
-//!   - `knack sync --purge` still removes leftover sigil-bearing shims
-//!     (the cleanup path for users migrating off pre-0.4 layouts) AND
-//!     the new-format meta-skill files.
+//!   1. **Default — meta-skill discovery.** Agents discover individual
+//!      skills via `knack list` at session time; the only on-disk shim
+//!      is the meta-skill itself. This replaced the pre-0.4 behavior of
+//!      writing a per-skill shim into each agent's native discovery
+//!      surface after every pull/publish.
+//!   2. **Opt-in — `knack link`.** A user can pin a specific published
+//!      skill as a native slash command (`/<slug>`). Those per-skill
+//!      files are current, supported, and owned by `link`/`unlink` —
+//!      NOT legacy, and `sync` never touches them.
+//!
+//! What's left here:
+//!   - `knack sync --purge` is the full-cleanup path: it removes every
+//!     knack-authored (sigil-bearing) file — pre-0.4 per-skill shims,
+//!     the meta-skill files, AND linked slash commands. To remove one
+//!     linked skill, use `knack unlink <slug>` instead.
 //!   - `knack sync` (no flag) and `knack sync --all-detected` are now
 //!     idempotent no-ops that emit an empty report. Callers (pull,
 //!     publish) keep invoking [`sync_one_skill`]; the signature is
@@ -63,8 +69,9 @@ pub fn run(args: SyncArgs, _client_config: Config, mode: OutputMode) -> CliResul
     chatter(
         mode,
         "knack sync is a no-op in the meta-skill model. \
-         Use `knack list` to discover skills; \
-         run `knack sync --purge` to clean up legacy per-skill shims.",
+         Agents discover skills via `knack list`; \
+         `knack link <slug>` (opt-in) pins a skill as a native slash command. \
+         `knack sync --purge` removes every knack-authored shim, including linked ones.",
     );
     emit_ok(
         mode,

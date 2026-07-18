@@ -455,3 +455,121 @@ fn skill_stats_untagged_enum_round_trips() {
     let parsed: api_skills::SkillStatsResponse = serde_json::from_value(by_ver).unwrap();
     assert!(matches!(parsed, api_skills::SkillStatsResponse::ByVersion(_)));
 }
+
+// === `knack mark last` / prefix shorthand (command layer + run_state) ===
+
+use knack_cli::commands::mark::{self, MarkArgs};
+use knack_cli::output::OutputMode;
+use knack_cli::run_state;
+use std::sync::Mutex;
+
+/// KNACK_RECENT_RUNS_FILE is process-global; serialize the tests that
+/// set it so parallel test threads can't cross paths.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn quiet() -> OutputMode {
+    OutputMode {
+        json: false,
+        quiet: true,
+        no_color: true,
+    }
+}
+
+fn mark_args(run_id: &str) -> MarkArgs {
+    MarkArgs {
+        run_id: run_id.into(),
+        outcome: Some("succeeded".into()),
+        status_flag: None,
+        note: None,
+        reason: None,
+        output: Vec::new(),
+        no_push: false,
+    }
+}
+
+// The guard is held across awaits on purpose: it serializes mutation of
+// the process-global env var for the whole test body.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn mark_last_closes_newest_unmarked_run() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("KNACK_RECENT_RUNS_FILE", tmp.path().join("recent_runs.json"));
+    }
+
+    const RUN_A: &str = "aaaa1111-cd2a-4749-b38a-ae885a1b417c";
+    const RUN_B: &str = "bbbb2222-cd2a-4749-b38a-ae885a1b417c";
+    run_state::push_run(RUN_A, "s1", "cloud").unwrap();
+    run_state::push_run(RUN_B, "s2", "cloud").unwrap();
+
+    let (server, client, _store) = common::fixture().await;
+    Mock::given(method("POST"))
+        .and(path(format!("/runs/{RUN_B}/mark")))
+        .and(body_partial_json(json!({"status": "succeeded"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(run_response(RUN_B, "running")))
+        .mount(&server)
+        .await;
+
+    mark::run(mark_args("last"), client, quiet()).await.unwrap();
+
+    // RUN_B (newest) was closed and flagged; `last` now points at RUN_A.
+    assert_eq!(run_state::last_open("cloud").unwrap().run_id, RUN_A);
+
+    unsafe {
+        std::env::remove_var("KNACK_RECENT_RUNS_FILE");
+    }
+}
+
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn mark_prefix_resolves_unique_recent_run() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("KNACK_RECENT_RUNS_FILE", tmp.path().join("recent_runs.json"));
+    }
+
+    const RUN_A: &str = "aaaa1111-cd2a-4749-b38a-ae885a1b417c";
+    const RUN_B: &str = "bbbb2222-cd2a-4749-b38a-ae885a1b417c";
+    run_state::push_run(RUN_A, "s1", "cloud").unwrap();
+    run_state::push_run(RUN_B, "s2", "cloud").unwrap();
+
+    let (server, client, _store) = common::fixture().await;
+    Mock::given(method("POST"))
+        .and(path(format!("/runs/{RUN_A}/mark")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(run_response(RUN_A, "running")))
+        .mount(&server)
+        .await;
+
+    mark::run(mark_args("aaaa"), client, quiet()).await.unwrap();
+
+    // RUN_A closed via its prefix; RUN_B is still the open one.
+    assert_eq!(run_state::last_open("cloud").unwrap().run_id, RUN_B);
+
+    unsafe {
+        std::env::remove_var("KNACK_RECENT_RUNS_FILE");
+    }
+}
+
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn mark_ambiguous_prefix_errors_without_network() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("KNACK_RECENT_RUNS_FILE", tmp.path().join("recent_runs.json"));
+    }
+
+    run_state::push_run("aaaa1111-cd2a-4749-b38a-ae885a1b417c", "s1", "cloud").unwrap();
+    run_state::push_run("aaaa2222-cd2a-4749-b38a-ae885a1b417c", "s2", "cloud").unwrap();
+
+    // No mock mounted: an ambiguous prefix must fail before any HTTP.
+    let (_server, client, _store) = common::fixture().await;
+    let err = mark::run(mark_args("aaaa"), client, quiet()).await.unwrap_err();
+    assert_eq!(err.code(), "MARK_AMBIGUOUS_PREFIX");
+
+    unsafe {
+        std::env::remove_var("KNACK_RECENT_RUNS_FILE");
+    }
+}

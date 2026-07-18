@@ -270,7 +270,7 @@ fn verify_tagged_content(
     let mut bad: Vec<String> = Vec::new();
     for (path, bytes) in &expected {
         match tagged_map.get(path.as_path()) {
-            Some(t) if *t == bytes.as_slice() => {}
+            Some(t) if eol_normalized_eq(t, bytes) => {}
             Some(_) => bad.push(format!("{} (content differs)", path.display())),
             None => bad.push(format!("{} (missing from tag)", path.display())),
         }
@@ -284,6 +284,33 @@ fn verify_tagged_content(
         )));
     }
     Ok(())
+}
+
+/// Byte equality modulo line endings. Registry repos with
+/// `core.autocrlf true` (the git-for-windows default) store LF in the
+/// tree while the working tree carries CRLF, so a strict byte-compare
+/// between disk and tag fails on every text file even though the
+/// content is identical. Skill files are all text, so CRLF→LF
+/// normalization before comparing is safe.
+fn eol_normalized_eq(a: &[u8], b: &[u8]) -> bool {
+    if a == b {
+        return true;
+    }
+    fn next_non_cr(iter: &mut std::iter::Peekable<std::slice::Iter<'_, u8>>) -> Option<u8> {
+        match iter.next() {
+            Some(b'\r') if iter.peek() == Some(&&b'\n') => iter.next().copied(),
+            other => other.copied(),
+        }
+    }
+    let mut ia = a.iter().peekable();
+    let mut ib = b.iter().peekable();
+    loop {
+        match (next_non_cr(&mut ia), next_non_cr(&mut ib)) {
+            (None, None) => return true,
+            (x, y) if x == y => continue,
+            _ => return false,
+        }
+    }
 }
 
 fn has_unrelated_dirty(repo: &Repository, current_slug: &str) -> BackendResult<bool> {
@@ -445,6 +472,16 @@ fn walk_tree(
         }
     }
     Ok(())
+}
+
+/// Latest published semver for `slug` in the registry clone, read from
+/// its `<slug>/v<semver>` tags (the publish source of truth — the
+/// working-tree meta.knack.yaml can drift ahead of or behind the tags).
+/// Used by `knack status` / bare-slug `knack diff`.
+pub fn latest_published_version(local_path: &Path, slug: &str) -> Option<String> {
+    let repo = Repository::open(local_path).ok()?;
+    let tag = find_latest_tag(&repo, slug).ok()??;
+    tag.rsplit_once("/v").map(|(_, v)| v.to_string())
 }
 
 fn find_latest_tag(repo: &Repository, slug: &str) -> BackendResult<Option<String>> {
@@ -836,6 +873,45 @@ mod tests {
             msg.contains("does not match") && msg.contains("notes.secret"),
             "expected a content-mismatch error naming the missing file, got: {msg}"
         );
+    }
+
+    #[test]
+    fn eol_normalized_eq_treats_crlf_and_lf_as_equal() {
+        assert!(eol_normalized_eq(b"a\r\nb\r\n", b"a\nb\n"));
+        assert!(eol_normalized_eq(b"a\nb\n", b"a\r\nb\r\n"));
+        assert!(eol_normalized_eq(b"", b""));
+        // A bare \r (not part of \r\n) is real content, not a line ending.
+        assert!(!eol_normalized_eq(b"a\rb", b"a\nb"));
+        assert!(!eol_normalized_eq(b"a\r\nb", b"a\nc"));
+        // Trailing CRLF vs nothing must still differ.
+        assert!(!eol_normalized_eq(b"a\r\n", b"a\r\nb"));
+    }
+
+    #[test]
+    fn publish_verify_tolerates_autocrlf_line_endings() {
+        // Windows field report: registry repos cloned with the
+        // git-for-windows default `core.autocrlf true` store LF in the
+        // tree while the publish source carries CRLF. The byte-strict
+        // verify failed every text file ("content differs", nothing
+        // pushed) even though the commit and tag were correct.
+        let dir = tempdir().unwrap();
+        let (repo, registry) = init_registry_with_bare_origin(dir.path());
+        {
+            let mut cfg = repo.config().unwrap();
+            cfg.set_bool("core.autocrlf", true).unwrap();
+        }
+        commit_all(&repo, "init");
+
+        let package = make_package(
+            "gamma",
+            "0.1.0",
+            vec![
+                ("SKILL.md", "# Gamma\r\nbody line\r\n"),
+                ("meta.knack.yaml", "slug: gamma\r\nversion: 0.1.0\r\n"),
+            ],
+        );
+        publish_blocking(&registry, "o", "r", package)
+            .expect("autocrlf EOL differences must not fail the publish verify");
     }
 
     #[test]

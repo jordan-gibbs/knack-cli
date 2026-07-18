@@ -210,6 +210,13 @@ pub struct StatsBucket {
     pub failed: u64,
     #[serde(rename = "runs_unmarked")]
     pub unmarked: u64,
+    /// Runs superseded without a verdict (auto-closed when a newer run
+    /// of the same skill started). In `runs_total`, out of
+    /// `success_rate` and `runs_unmarked` — mirrors the cloud
+    /// semantics, where an abandoned mark is neither a verdict nor
+    /// missing. Additive field; cloud parity consumers can ignore it.
+    #[serde(rename = "runs_abandoned")]
+    pub abandoned: u64,
     /// `succeeded / (succeeded + failed)`. `None` when there are no
     /// marked runs (avoids `0/0` and the misleading "0% success" framing
     /// that comes with it).
@@ -378,6 +385,7 @@ pub fn build_bucket(key: BTreeMap<String, Option<String>>, rows: &[&RunSnapshot]
     let mut succeeded = 0u64;
     let mut failed = 0u64;
     let mut unmarked = 0u64;
+    let mut abandoned = 0u64;
     let mut durations: Vec<u64> = Vec::new();
     // Notes are bucketed by `normalize_note` so cosmetic variants ("Edge
     // case BROKE", "edge case broke ", "edge case broke.") collapse to one
@@ -393,6 +401,9 @@ pub fn build_bucket(key: BTreeMap<String, Option<String>>, rows: &[&RunSnapshot]
             // third bucket the cloud schema lacks. Notes still flow
             // through to the top-notes counter below.
             "failed" | "aborted" => failed += 1,
+            // Superseded without a verdict — its own bucket, so it
+            // neither drags success_rate nor masquerades as unmarked.
+            "abandoned" => abandoned += 1,
             _ => unmarked += 1,
         }
         if let Some(d) = s.duration_ms {
@@ -445,6 +456,7 @@ pub fn build_bucket(key: BTreeMap<String, Option<String>>, rows: &[&RunSnapshot]
         succeeded,
         failed,
         unmarked,
+        abandoned,
         success_rate,
         p50_ms,
         p95_ms,

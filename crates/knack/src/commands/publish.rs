@@ -230,6 +230,7 @@ pub async fn run(args: PublishArgs, client: ApiClient, mode: OutputMode) -> CliR
         }),
         || {
             println!("✓ {}@{} published", args.slug, new_version.version);
+            println!("  from {}", crate::output::display_path(&dir));
             for r in &shim_report.written {
                 println!("  ↪ {} shim → {}", r.agent, r.path);
             }

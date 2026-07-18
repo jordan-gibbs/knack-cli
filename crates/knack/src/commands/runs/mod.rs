@@ -12,6 +12,7 @@ use crate::errors::CliResult;
 use crate::output::OutputMode;
 
 pub mod diff;
+pub mod flush;
 pub mod list;
 pub mod overview;
 pub mod show;
@@ -32,6 +33,8 @@ pub enum RunsCmd {
     Trend(trend::TrendArgs),
     /// Portfolio view: per-skill snapshot + regression + staleness flags.
     Overview(overview::OverviewArgs),
+    /// Self-host: push queued telemetry commits now (no-op on cloud).
+    Flush(flush::FlushArgs),
 }
 
 pub async fn run(cmd: RunsCmd, client: ApiClient, mode: OutputMode) -> CliResult<()> {
@@ -42,6 +45,7 @@ pub async fn run(cmd: RunsCmd, client: ApiClient, mode: OutputMode) -> CliResult
         RunsCmd::Diff(a) => diff::run(a, client, mode).await,
         RunsCmd::Trend(a) => trend::run(a, client, mode).await,
         RunsCmd::Overview(a) => overview::run(a, client, mode).await,
+        RunsCmd::Flush(a) => flush::run(a, client, mode).await,
     }
 }
 

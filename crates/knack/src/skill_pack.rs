@@ -343,6 +343,25 @@ pub struct SkillFrontmatter {
     /// triggers progressive disclosure. Required for Claude Code shim
     /// writers to do anything useful.
     pub description: Option<String>,
+    /// Knack's partial-loading extension: named usage modes, each
+    /// listing the files an agent needs for that mode (`*` wildcards
+    /// allowed). Mirrors `skillModeSchema` in packages/skill-format.
+    /// `knack run --mode <name>` resolves against this and records the
+    /// mode in telemetry; `knack validate` checks every listed pattern
+    /// matches at least one file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modes: Option<std::collections::BTreeMap<String, SkillModeSpec>>,
+}
+
+/// One entry under `modes:` in SKILL.md frontmatter.
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+pub struct SkillModeSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Paths relative to the skill folder; `*` matches within a path
+    /// segment (e.g. `examples/email-*.md`).
+    #[serde(default)]
+    pub load: Vec<String>,
 }
 
 /// Lift YAML frontmatter from the head of a SKILL.md body.
