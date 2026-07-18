@@ -35,7 +35,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 console = "0.15"
-indicatif = "0.17"
+indicatif = "0.18"
 dirs = "5"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 similar = "2"
